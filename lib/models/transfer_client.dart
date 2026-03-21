@@ -4,6 +4,7 @@ class TransferClient {
   final bool receiving;
   final String ip;
   final String deviceType;
+  final bool isServer;
 
   const TransferClient({
     required this.clientId,
@@ -11,6 +12,7 @@ class TransferClient {
     required this.receiving,
     required this.ip,
     this.deviceType = 'desktop',
+    this.isServer = false,
   });
 
   factory TransferClient.fromJson(Map<String, dynamic> json) => TransferClient(
@@ -19,6 +21,7 @@ class TransferClient {
         receiving: json['receiving'] as bool,
         ip: json['ip'] as String,
         deviceType: (json['deviceType'] as String?) ?? 'desktop',
+        isServer: (json['isServer'] as bool?) ?? false,
       );
 
   bool get isMobile => deviceType == 'mobile';

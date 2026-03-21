@@ -26,7 +26,9 @@ También puede funcionar **sin ningún servidor**: el celular levanta su propio 
 
 ### Transferencia P2P directa
 
-- **Dispositivos conectados** — lista en tiempo real de todos los clientes conectados al relay (móviles y desktops), con ícono de tipo de dispositivo
+- **Dispositivos conectados** — lista en tiempo real de todos los clientes conectados al relay, con ícono por tipo: 🖥️ servidor Tauri, 🌐 navegador web, 📱 móvil
+- **Badge servidor** — los peers que son servidores SrvFiles muestran un badge "srv" y un botón "Ver" para navegar a sus archivos
+- **Cambio de servidor** — al tocar la IP en el header, se abre un sheet con el servidor actual (no clickeable), otros servidores encontrados en la red y un campo de IP manual para conectarse a cualquier otro servidor
 - **Enviar archivo a un peer** — seleccioná un dispositivo de la lista y enviále un archivo directamente, sin pasar por disco
 - **Aceptar / rechazar transferencias entrantes** — dialog de confirmación al recibir una solicitud
 - **Progreso de transferencia** — barra animada durante el envío y recepción
@@ -43,9 +45,9 @@ También puede funcionar **sin ningún servidor**: el celular levanta su propio 
 ### Descubrimiento automático de servidores
 
 - Al abrir la app, escanea la subred local en paralelo buscando servidores SrvFiles activos (puerto 3001)
-- Si encuentra uno, se conecta automáticamente
-- Si ya se conectó antes, intenta reconectar al último servidor conocido primero
-- Si no encuentra nada, muestra el campo para ingresar la IP manualmente
+- Si ya se conectó antes, prueba primero el último servidor conocido (respuesta inmediata)
+- Los servidores encontrados se muestran como tiles seleccionables — el usuario elige a cuál conectarse (sin auto-conexión)
+- Si no encuentra nada, muestra el campo para ingresar la IP manualmente; también está disponible "Omitir servidor" para modo P2P puro
 
 ### General
 
@@ -54,6 +56,7 @@ También puede funcionar **sin ningún servidor**: el celular levanta su propio 
 - **Nombre de dispositivo** — identificate con un nombre visible para los demás peers (se configura en el primer arranque)
 - **Reconexión automática** — si el servidor se desconecta, reintenta automáticamente cada 3 segundos
 - **Indicador de conexión perdida** — banner rojo cuando el servidor se desconecta; oculta la lista de archivos y el botón de subir hasta reconectar
+- **Copyright al pie** — el footer del QR incluye los créditos del autor con link al repositorio
 
 ---
 
@@ -61,9 +64,9 @@ También puede funcionar **sin ningún servidor**: el celular levanta su propio 
 
 | Componente | Repo | Descripción |
 |------------|------|-------------|
-| **Backend** | [srvfiles](https://github.com/tu-usuario/srvfiles) | Servidor Express + WebSocket (Node.js) |
-| **Frontend web** | [srvfiles](https://github.com/tu-usuario/srvfiles) | Cliente React/Vite |
-| **Desktop (Tauri)** | [srvfiles](https://github.com/tu-usuario/srvfiles) | App nativa macOS/Windows/Linux |
+| **Backend** | [srvfiles](https://github.com/dotdeivid/srvfiles) | Servidor Express + WebSocket (Node.js) |
+| **Frontend web** | [srvfiles](https://github.com/dotdeivid/srvfiles) | Cliente React/Vite |
+| **Desktop (Tauri)** | [srvfiles](https://github.com/dotdeivid/srvfiles) | App nativa macOS/Windows/Linux — actúa como servidor + cliente |
 | **Mobile (este repo)** | — | Cliente Android Flutter |
 
 Los cuatro componentes comparten el mismo protocolo WebSocket para P2P. Un celular puede transferir archivos directamente a la app de escritorio y viceversa.
@@ -177,7 +180,7 @@ mobile/
 │   │   ├── file_info.dart               # Modelo de archivo
 │   │   ├── disk_stats.dart              # Modelo de estadísticas de disco
 │   │   ├── app_config.dart              # Configuración del servidor
-│   │   ├── transfer_client.dart         # Peer conectado (clientId, appName, deviceType)
+│   │   ├── transfer_client.dart         # Peer conectado (clientId, appName, deviceType, isServer)
 │   │   ├── transfer_request.dart        # Solicitud de transferencia entrante
 │   │   └── active_transfer.dart         # Estado de transferencia en curso
 │   ├── services/
@@ -236,6 +239,7 @@ mobile/
 | Persistencia | `shared_preferences` |
 | Notificaciones | `flutter_local_notifications` |
 | QR | `qr_flutter` |
+| Links externos | `url_launcher` |
 | Fuentes | `google_fonts` (Outfit, Inter) |
 | Relay embebido | `dart:io` HttpServer + WebSocket |
 | CI/CD | GitHub Actions · `subosito/flutter-action` · `softprops/action-gh-release` |
@@ -248,10 +252,11 @@ El relay (ya sea el del servidor SrvFiles desktop o el relay embebido en el celu
 
 | Mensaje | Dirección | Descripción |
 |---------|-----------|-------------|
-| `hello` | cliente → relay | Registro con `appName` y `deviceType` |
+| `hello` | cliente → relay | Registro con `appName`, `deviceType` e `isServer: boolean` |
 | `welcome` | relay → cliente | Confirmación con `clientId` asignado |
-| `clients` | relay → todos | Lista actualizada de peers conectados |
+| `clients` | relay → todos | Lista actualizada de peers conectados (incluye `isServer` por peer) |
 | `set-receiving` | cliente → relay | Marca al cliente como disponible para recibir |
+| `rename` | cliente → relay | Cambia el nombre visible del cliente sin reconectar |
 | `send-request` | cliente → relay → peer | Solicitud de transferencia |
 | `send-accept` | peer → relay → cliente | Aceptación |
 | `send-reject` | peer → relay → cliente | Rechazo |

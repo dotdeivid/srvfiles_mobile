@@ -62,6 +62,9 @@ dependencies:
   # Notificaciones locales (descarga/transferencia completada)
   flutter_local_notifications: ^18.0.1
 
+  # Abrir URLs en el navegador externo
+  url_launcher: ^6.3.0
+
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8

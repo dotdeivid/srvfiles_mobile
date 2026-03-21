@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../theme/app_colors.dart';
 import '../models/app_config.dart';
 
@@ -73,6 +74,33 @@ class QrFooter extends StatelessWidget {
               color: AppColors.textAccent,
               fontFamily: 'monospace',
             ),
+          ),
+          const SizedBox(height: AppSpacing.lg),
+
+          // Copyright
+          Wrap(
+            alignment: WrapAlignment.center,
+            children: [
+              const Text(
+                '© 2026 Carlos David Sandoval · ',
+                style: TextStyle(fontSize: 11, color: AppColors.textMuted),
+              ),
+              GestureDetector(
+                onTap: () => launchUrl(
+                  Uri.parse('https://github.com/dotdeivid'),
+                  mode: LaunchMode.externalApplication,
+                ),
+                child: const Text(
+                  'github.com/dotdeivid',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: AppColors.textAccent,
+                    decoration: TextDecoration.underline,
+                    decorationColor: AppColors.textAccent,
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
       ),

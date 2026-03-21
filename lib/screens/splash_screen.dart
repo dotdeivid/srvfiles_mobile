@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../theme/app_colors.dart';
 import '../widgets/gradient_text.dart';
+import '../widgets/pulsing_dot.dart';
 import '../services/discovery_service.dart';
 import '../services/device_name_service.dart';
 import '../widgets/name_dialog.dart';
@@ -21,14 +22,14 @@ class _SplashScreenState extends State<SplashScreen> {
   final _deviceNameService = DeviceNameService();
 
   bool _searching = true;
-  bool _showOptions = false;
   String? _error;
   final _ipController = TextEditingController();
+  List<DiscoveredServer> _foundServers = [];
 
   @override
   void initState() {
     super.initState();
-    _autoConnect();
+    _scan();
   }
 
   @override
@@ -37,46 +38,37 @@ class _SplashScreenState extends State<SplashScreen> {
     super.dispose();
   }
 
-  Future<void> _autoConnect() async {
+  Future<void> _scan() async {
     setState(() {
       _searching = true;
       _error = null;
+      _foundServers = [];
     });
 
-    // Mostrar opciones después de 2 segundos para que el usuario pueda
-    // escribir manualmente mientras el scan sigue en background
-    Future.delayed(const Duration(seconds: 2), () {
-      if (mounted && _searching) {
-        setState(() => _showOptions = true);
-      }
-    });
-
-    // 1. Intentar con el último servidor guardado
+    // 1. Intentar con el último servidor guardado para mostrarlo rápido
     final prefs = await SharedPreferences.getInstance();
     final lastServer = prefs.getString(_lastServerKey);
-
     if (lastServer != null) {
-      final ok = await _discoveryService.tryConnect(lastServer);
-      if (ok && mounted) {
-        await _onServerFound(lastServer);
-        return;
+      final server = await _discoveryService.probe(lastServer);
+      if (server != null && mounted) {
+        setState(() => _foundServers = [server]);
       }
     }
 
-    // 2. Scan directo de la subred LAN
+    // 2. Scan completo de la subred LAN
     debugPrint('[Splash] Iniciando scan LAN...');
     final servers = await _discoveryService.scanLan();
-    if (servers.isNotEmpty && mounted) {
-      debugPrint('[Splash] Servidor encontrado: ${servers.first.url}');
-      await _onServerFound(servers.first.url);
-      return;
-    }
+    debugPrint('[Splash] Scan completado: ${servers.length} servidores');
 
-    debugPrint('[Splash] No se encontró servidor en la LAN');
     if (mounted) {
+      final existing = _foundServers.map((s) => s.url).toSet();
+      final merged = [
+        ..._foundServers,
+        ...servers.where((s) => !existing.contains(s.url)),
+      ];
       setState(() {
+        _foundServers = merged;
         _searching = false;
-        _showOptions = true;
       });
     }
   }
@@ -95,27 +87,21 @@ class _SplashScreenState extends State<SplashScreen> {
     }
   }
 
-  Future<void> _onServerFound(String serverUrl) async {
+  Future<void> _onServerSelected(String serverUrl) async {
     await _saveLastServer(serverUrl);
     await _ensureDeviceName();
-
     if (mounted) {
       Navigator.of(context).pushReplacement(
-        MaterialPageRoute(
-          builder: (_) => HomeScreen(serverUrl: serverUrl),
-        ),
+        MaterialPageRoute(builder: (_) => HomeScreen(serverUrl: serverUrl)),
       );
     }
   }
 
   Future<void> _onSkipServer() async {
     await _ensureDeviceName();
-
     if (mounted) {
       Navigator.of(context).pushReplacement(
-        MaterialPageRoute(
-          builder: (_) => const HomeScreen(serverUrl: null),
-        ),
+        MaterialPageRoute(builder: (_) => const HomeScreen(serverUrl: null)),
       );
     }
   }
@@ -124,14 +110,9 @@ class _SplashScreenState extends State<SplashScreen> {
     final input = _ipController.text.trim();
     if (input.isEmpty) return;
 
-    // Agregar http:// y puerto si no los tiene
     String url = input;
-    if (!url.startsWith('http')) {
-      url = 'http://$url';
-    }
-    if (!RegExp(r':\d+$').hasMatch(url)) {
-      url = '$url:3001';
-    }
+    if (!url.startsWith('http')) url = 'http://$url';
+    if (!RegExp(r':\d+$').hasMatch(url)) url = '$url:3001';
 
     setState(() {
       _searching = true;
@@ -140,7 +121,7 @@ class _SplashScreenState extends State<SplashScreen> {
 
     final ok = await _discoveryService.tryConnect(url);
     if (ok && mounted) {
-      await _onServerFound(url);
+      await _onServerSelected(url);
     } else if (mounted) {
       setState(() {
         _searching = false;
@@ -155,121 +136,266 @@ class _SplashScreenState extends State<SplashScreen> {
 
     return Scaffold(
       body: SafeArea(
-        child: Center(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xl),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                // ─── Logo con Hero ─────────────────────────────
-                Hero(
-                  tag: 'srvfiles-logo',
-                  child: Container(
-                    width: 64,
-                    height: 64,
-                    decoration: BoxDecoration(
-                      color: AppColors.bgSecondary,
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: AppColors.borderMedium),
-                    ),
-                    child: const Center(
-                      child: Icon(
-                        Icons.folder_shared_rounded,
-                        color: AppColors.accentPrimary,
-                        size: 32,
-                      ),
-                    ),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppSpacing.xl,
+            vertical: AppSpacing.xxl,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              // ─── Logo ──────────────────────────────────────────
+              Hero(
+                tag: 'srvfiles-logo',
+                child: Container(
+                  width: 64,
+                  height: 64,
+                  decoration: BoxDecoration(
+                    color: AppColors.bgSecondary,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: AppColors.borderMedium),
                   ),
-                ),
-
-                const SizedBox(height: AppSpacing.md),
-
-                GradientText(
-                  'SrvFiles',
-                  style: theme.textTheme.headlineMedium,
-                ),
-
-                const SizedBox(height: AppSpacing.xxl),
-
-                // ─── Spinner ───────────────────────────────────
-                if (_searching) ...[
-                  const SizedBox(
-                    width: 28,
-                    height: 28,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2.5,
+                  child: const Center(
+                    child: Icon(
+                      Icons.folder_shared_rounded,
                       color: AppColors.accentPrimary,
+                      size: 32,
                     ),
                   ),
-                  const SizedBox(height: AppSpacing.md),
-                  Text(
-                    'Buscando servidor...',
-                    style: theme.textTheme.bodyMedium,
-                  ),
-                ],
+                ),
+              ),
 
-                // ─── Error ─────────────────────────────────────
-                if (_error != null) ...[
-                  const SizedBox(height: AppSpacing.sm),
-                  Text(
+              const SizedBox(height: AppSpacing.md),
+
+              GradientText(
+                'SrvFiles',
+                style: theme.textTheme.headlineMedium,
+              ),
+
+              const SizedBox(height: AppSpacing.xxl),
+
+              // ─── Lista de servidores encontrados ───────────────
+              if (_foundServers.isNotEmpty) ...[
+                _buildServerList(theme),
+                const SizedBox(height: AppSpacing.xl),
+              ],
+
+              // ─── Campo manual ──────────────────────────────────
+              // "Buscando..." mientras escanea, o el label normal al terminar
+              Align(
+                alignment: Alignment.centerLeft,
+                child: _searching
+                    ? Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const SizedBox(
+                            width: 12,
+                            height: 12,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 1.5,
+                              color: AppColors.accentPrimary,
+                            ),
+                          ),
+                          const SizedBox(width: AppSpacing.sm),
+                          Text(
+                            'Buscando servidores...',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: AppColors.textMuted,
+                            ),
+                          ),
+                        ],
+                      )
+                    : Text(
+                        'Ingresá la IP del servidor',
+                        style: theme.textTheme.titleSmall,
+                      ),
+              ),
+
+              const SizedBox(height: AppSpacing.sm),
+
+              if (!_searching && _foundServers.isEmpty)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Abrí SrvFiles en tu PC y copiá la dirección IP que aparece.',
+                    style: theme.textTheme.bodySmall,
+                  ),
+                ),
+
+              const SizedBox(height: AppSpacing.md),
+
+              // ─── Error ─────────────────────────────────────────
+              if (_error != null) ...[
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
                     _error!,
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: AppColors.danger,
                     ),
-                    textAlign: TextAlign.center,
                   ),
-                ],
+                ),
+                const SizedBox(height: AppSpacing.sm),
+              ],
 
-                // ─── Opciones cuando no se encuentra servidor ──
-                if (_showOptions) ...[
-                  const SizedBox(height: AppSpacing.xl),
-                  Text(
-                    'Ingresá la IP del servidor',
-                    style: theme.textTheme.titleSmall,
+              TextField(
+                controller: _ipController,
+                keyboardType: TextInputType.url,
+                textInputAction: TextInputAction.go,
+                onSubmitted: (_) => _connectManual(),
+                decoration: const InputDecoration(
+                  hintText: '192.168.1.x:3001',
+                  prefixIcon: Icon(
+                    Icons.lan_rounded,
+                    color: AppColors.textMuted,
                   ),
-                  const SizedBox(height: AppSpacing.sm),
-                  Text(
-                    'Abrí SrvFiles en tu PC y copiá la dirección IP que aparece.',
-                    style: theme.textTheme.bodySmall,
-                    textAlign: TextAlign.center,
+                ),
+              ),
+
+              const SizedBox(height: AppSpacing.md),
+
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: _searching ? null : _connectManual,
+                  child: const Text('Conectar'),
+                ),
+              ),
+
+              const SizedBox(height: AppSpacing.md),
+
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton(
+                  onPressed: _searching ? null : _onSkipServer,
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: AppColors.borderMedium),
                   ),
-                  const SizedBox(height: AppSpacing.md),
-                  TextField(
-                    controller: _ipController,
-                    keyboardType: TextInputType.url,
-                    textInputAction: TextInputAction.go,
-                    onSubmitted: (_) => _connectManual(),
-                    decoration: const InputDecoration(
-                      hintText: '192.168.1.x:3001',
-                      prefixIcon: Icon(
-                        Icons.lan_rounded,
-                        color: AppColors.textMuted,
-                      ),
-                    ),
+                  child: const Text('Omitir servidor'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildServerList(ThemeData theme) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(AppSpacing.sm),
+      decoration: BoxDecoration(
+        color: AppColors.bgCard,
+        borderRadius: AppRadius.borderMd,
+        border: Border.all(color: AppColors.borderSubtle),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header
+          Padding(
+            padding: const EdgeInsets.only(
+              left: AppSpacing.xs,
+              bottom: AppSpacing.xs,
+            ),
+            child: Row(
+              children: [
+                const PulsingDot(size: 8),
+                const SizedBox(width: AppSpacing.sm),
+                Text(
+                  'Servidores encontrados',
+                  style: const TextStyle(
+                    color: AppColors.textSecondary,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
                   ),
-                  const SizedBox(height: AppSpacing.md),
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton(
-                      onPressed: _searching ? null : _connectManual,
-                      child: const Text('Conectar'),
-                    ),
-                  ),
-                  const SizedBox(height: AppSpacing.md),
-                  SizedBox(
-                    width: double.infinity,
-                    child: OutlinedButton(
-                      onPressed: _searching ? null : _onSkipServer,
-                      style: OutlinedButton.styleFrom(
-                        side: const BorderSide(color: AppColors.borderMedium),
-                      ),
-                      child: const Text('Omitir servidor'),
-                    ),
-                  ),
-                ],
+                ),
               ],
             ),
           ),
+          // Filas de servidores
+          ..._foundServers.map((server) => _ServerRow(
+                server: server,
+                onTap: _searching ? null : () => _onServerSelected(server.url),
+              )),
+        ],
+      ),
+    );
+  }
+}
+
+// ─── Fila de un servidor descubierto ─────────────────────────────────
+
+class _ServerRow extends StatelessWidget {
+  const _ServerRow({required this.server, required this.onTap});
+
+  final DiscoveredServer server;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: AppRadius.borderSm,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.sm,
+          vertical: AppSpacing.xs,
+        ),
+        child: Row(
+          children: [
+            const PulsingDot(size: 8),
+            const SizedBox(width: AppSpacing.sm),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(
+                        Icons.computer_rounded,
+                        size: 14,
+                        color: AppColors.textSecondary,
+                      ),
+                      const SizedBox(width: 4),
+                      Flexible(
+                        child: Text(
+                          server.appName,
+                          style: const TextStyle(
+                            color: AppColors.textPrimary,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w500,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                  Text(
+                    server.ip,
+                    style: const TextStyle(
+                      color: AppColors.textMuted,
+                      fontSize: 11,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            TextButton.icon(
+              onPressed: onTap,
+              icon: const Icon(Icons.link_rounded, size: 14),
+              label: const Text('Conectar', style: TextStyle(fontSize: 12)),
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: AppSpacing.sm,
+                  vertical: 4,
+                ),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+            ),
+          ],
         ),
       ),
     );

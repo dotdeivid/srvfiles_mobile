@@ -36,7 +36,12 @@ class TransferService {
   bool get isConnected => _channel != null && !_disposed;
 
   /// Conecta al WebSocket del servidor.
+  /// Cierra cualquier conexión previa antes de abrir la nueva.
   void connect(ApiConfig config) {
+    // Cerrar la conexión anterior para evitar duplicados en el relay
+    _subscription?.cancel();
+    _channel?.sink.close();
+
     _disposed = false;
     final wsUrl = config.wsUrl;
     _channel = WebSocketChannel.connect(Uri.parse(wsUrl));

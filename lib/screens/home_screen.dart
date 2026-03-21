@@ -32,6 +32,7 @@ import '../widgets/skeleton_loader.dart';
 import '../services/notification_service.dart';
 import '../services/received_files_service.dart';
 import '../services/embedded_relay.dart';
+import '../services/discovery_service.dart';
 
 /// Intervalo de polling (mismo que el frontend web: 5 segundos).
 const _pollInterval = Duration(seconds: 5);
@@ -686,55 +687,23 @@ class _HomeScreenState extends State<HomeScreen> {
 
   // ─── Conectar a servidor desde HomeScreen ────────────────────────
 
-  void _showConnectDialog() {
-    final controller = TextEditingController();
-    showDialog(
+  void _showConnectDialog() => _showConnectSheet();
+
+  void _showConnectSheet() {
+    showModalBottomSheet(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Conectarse a servidor'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              'Ingresá la IP del servidor SrvFiles',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-            const SizedBox(height: AppSpacing.md),
-            TextField(
-              controller: controller,
-              keyboardType: TextInputType.url,
-              textInputAction: TextInputAction.go,
-              onSubmitted: (_) {
-                Navigator.of(ctx).pop(controller.text.trim());
-              },
-              decoration: const InputDecoration(
-                hintText: '192.168.1.x:3001',
-                prefixIcon: Icon(Icons.lan_rounded, color: AppColors.textMuted),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Cancelar'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.of(ctx).pop(controller.text.trim()),
-            child: const Text('Conectar'),
-          ),
-        ],
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => _ConnectSheet(
+        currentServerUrl: widget.serverUrl,
+        onConnect: (url) {
+          if (!mounted) return;
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(builder: (_) => HomeScreen(serverUrl: url)),
+          );
+        },
       ),
-    ).then((input) {
-      if (input == null || (input as String).isEmpty) return;
-      String url = input;
-      if (!url.startsWith('http')) url = 'http://$url';
-      if (!RegExp(r':\d+$').hasMatch(url)) url = '$url:3001';
-      if (!mounted) return;
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => HomeScreen(serverUrl: url)),
-      );
-    });
+    );
   }
 
   // ─── Build ─────────────────────────────────────────────────────────
@@ -822,6 +791,13 @@ class _HomeScreenState extends State<HomeScreen> {
                           activeTransfer: _activeTransfer,
                           onSendFile: _onSendFile,
                           onCancelTransfer: _cancelTransfer,
+                          onViewServer: (url) {
+                            Navigator.of(context).pushReplacement(
+                              MaterialPageRoute(
+                                builder: (_) => HomeScreen(serverUrl: url),
+                              ),
+                            );
+                          },
                         ),
                       ),
 
@@ -1305,4 +1281,275 @@ class _PendingSend {
     required this.file,
     required this.peerId,
   });
+}
+
+// ─── Bottom sheet de conexión a servidor ──────────────────────────────
+
+class _ConnectSheet extends StatefulWidget {
+  const _ConnectSheet({required this.onConnect, this.currentServerUrl});
+
+  final void Function(String url) onConnect;
+  final String? currentServerUrl;
+
+  @override
+  State<_ConnectSheet> createState() => _ConnectSheetState();
+}
+
+class _ConnectSheetState extends State<_ConnectSheet> {
+  final _discovery = DiscoveryService();
+  final _ipController = TextEditingController();
+
+  bool _scanning = true;
+  List<DiscoveredServer> _servers = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _scan();
+  }
+
+  @override
+  void dispose() {
+    _ipController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _scan() async {
+    setState(() {
+      _scanning = true;
+      _servers = [];
+    });
+    final results = await _discovery.scanLan();
+    if (mounted) {
+      setState(() {
+        _servers = results;
+        _scanning = false;
+      });
+    }
+  }
+
+  void _connectTo(String url) {
+    Navigator.of(context).pop();
+    widget.onConnect(url);
+  }
+
+  void _connectManual() {
+    final input = _ipController.text.trim();
+    if (input.isEmpty) return;
+    String url = input;
+    if (!url.startsWith('http')) url = 'http://$url';
+    if (!RegExp(r':\d+$').hasMatch(url)) url = '$url:3001';
+    _connectTo(url);
+  }
+
+  Widget _buildCurrentServerTile(String serverUrl, ThemeData theme) {
+    final displayIp = serverUrl
+        .replaceAll('http://', '')
+        .replaceAll('https://', '');
+    return ListTile(
+      leading: Container(
+        width: 36,
+        height: 36,
+        decoration: BoxDecoration(
+          color: AppColors.accentPrimary.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: const Icon(
+          Icons.computer_rounded,
+          color: AppColors.accentPrimary,
+          size: 18,
+        ),
+      ),
+      title: Text(
+        displayIp,
+        style: theme.textTheme.bodyMedium?.copyWith(
+          fontFamily: 'monospace',
+          fontSize: 13,
+        ),
+      ),
+      trailing: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+          color: AppColors.accentPrimary.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: const Text(
+          'Conectado',
+          style: TextStyle(
+            color: AppColors.accentPrimary,
+            fontSize: 11,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    // Excluir el servidor ya conectado de la lista escaneada
+    final otherServers = _servers
+        .where((s) => s.url != widget.currentServerUrl)
+        .toList();
+
+    return Container(
+      decoration: const BoxDecoration(
+        color: AppColors.bgSecondary,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      padding: EdgeInsets.only(
+        bottom: MediaQuery.of(context).viewInsets.bottom + AppSpacing.xl,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Handle
+          Center(
+            child: Container(
+              margin: const EdgeInsets.only(top: AppSpacing.sm),
+              width: 36,
+              height: 4,
+              decoration: BoxDecoration(
+                color: AppColors.borderMedium,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              AppSpacing.lg, AppSpacing.md, AppSpacing.lg, AppSpacing.sm,
+            ),
+            child: Text('Conectar a servidor', style: theme.textTheme.titleMedium),
+          ),
+
+          // Servidor actual (no clickeable, "Ya conectado")
+          if (widget.currentServerUrl != null) ...[
+            _buildCurrentServerTile(widget.currentServerUrl!, theme),
+            const Divider(
+              color: AppColors.borderSubtle,
+              indent: AppSpacing.lg,
+              endIndent: AppSpacing.lg,
+              height: 1,
+            ),
+          ],
+
+          // Spinner o lista de servidores encontrados
+          if (_scanning)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: AppSpacing.md),
+              child: Center(
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 1.5,
+                        color: AppColors.accentPrimary,
+                      ),
+                    ),
+                    SizedBox(width: AppSpacing.sm),
+                    Text(
+                      'Buscando servidores...',
+                      style: TextStyle(color: AppColors.textMuted, fontSize: 13),
+                    ),
+                  ],
+                ),
+              ),
+            )
+          else if (otherServers.isEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                AppSpacing.lg, AppSpacing.sm, AppSpacing.lg, AppSpacing.sm,
+              ),
+              child: Text(
+                'No se encontraron otros servidores en la red.',
+                style: theme.textTheme.bodySmall,
+              ),
+            )
+          else ...[
+            ...otherServers.map(
+              (server) => ListTile(
+                onTap: () => _connectTo(server.url),
+                leading: Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    color: AppColors.accentPrimary.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Icon(
+                    Icons.computer_rounded,
+                    color: AppColors.accentPrimary,
+                    size: 18,
+                  ),
+                ),
+                title: Text(server.appName, style: theme.textTheme.bodyMedium),
+                subtitle: Text(
+                  server.ip,
+                  style: const TextStyle(
+                    fontFamily: 'monospace',
+                    color: AppColors.textMuted,
+                    fontSize: 11,
+                  ),
+                ),
+                trailing: const Icon(
+                  Icons.chevron_right_rounded,
+                  color: AppColors.textMuted,
+                  size: 20,
+                ),
+              ),
+            ),
+            const Divider(
+              color: AppColors.borderSubtle,
+              indent: AppSpacing.lg,
+              endIndent: AppSpacing.lg,
+            ),
+          ],
+
+          // Campo manual
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              AppSpacing.lg, AppSpacing.xs, AppSpacing.lg, AppSpacing.sm,
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _ipController,
+                    keyboardType: TextInputType.url,
+                    textInputAction: TextInputAction.go,
+                    onSubmitted: (_) => _connectManual(),
+                    decoration: const InputDecoration(
+                      hintText: '192.168.1.x:3001',
+                      prefixIcon: Icon(Icons.lan_rounded, color: AppColors.textMuted),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: AppSpacing.sm),
+                ElevatedButton(
+                  onPressed: _connectManual,
+                  child: const Text('Conectar'),
+                ),
+              ],
+            ),
+          ),
+
+          // Botón para re-escanear
+          if (!_scanning)
+            Center(
+              child: TextButton.icon(
+                onPressed: _scan,
+                icon: const Icon(Icons.refresh_rounded, size: 16),
+                label: const Text('Volver a escanear', style: TextStyle(fontSize: 13)),
+                style: TextButton.styleFrom(foregroundColor: AppColors.textMuted),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
 }

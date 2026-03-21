@@ -16,6 +16,7 @@ class OnlineClients extends StatelessWidget {
     required this.activeTransfer,
     required this.onSendFile,
     required this.onCancelTransfer,
+    this.onViewServer,
   });
 
   final List<TransferClient> clients;
@@ -23,6 +24,7 @@ class OnlineClients extends StatelessWidget {
   final ActiveTransfer? activeTransfer;
   final void Function(String clientId, String peerName) onSendFile;
   final VoidCallback onCancelTransfer;
+  final void Function(String serverUrl)? onViewServer;
 
   @override
   Widget build(BuildContext context) {
@@ -78,6 +80,7 @@ class OnlineClients extends StatelessWidget {
                   activeTransfer: activeTransfer,
                   onSendFile: onSendFile,
                   onCancel: onCancelTransfer,
+                  onViewServer: onViewServer,
                 )),
           ],
         ),
@@ -94,12 +97,14 @@ class _ClientRow extends StatelessWidget {
     required this.activeTransfer,
     required this.onSendFile,
     required this.onCancel,
+    this.onViewServer,
   });
 
   final TransferClient client;
   final ActiveTransfer? activeTransfer;
   final void Function(String clientId, String peerName) onSendFile;
   final VoidCallback onCancel;
+  final void Function(String serverUrl)? onViewServer;
 
   @override
   Widget build(BuildContext context) {
@@ -134,7 +139,11 @@ class _ClientRow extends StatelessWidget {
                       Row(
                         children: [
                           Icon(
-                            client.isMobile ? Icons.phone_android : Icons.computer,
+                            client.isMobile
+                                ? Icons.phone_android
+                                : client.isServer
+                                    ? Icons.computer_rounded
+                                    : Icons.language,
                             size: 14,
                             color: AppColors.textSecondary,
                           ),
@@ -150,6 +159,26 @@ class _ClientRow extends StatelessWidget {
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),
+                          if (client.isServer) ...[
+                            const SizedBox(width: 6),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                              decoration: BoxDecoration(
+                                color: AppColors.accentPrimary.withValues(alpha: 0.12),
+                                border: Border.all(color: AppColors.accentPrimary.withValues(alpha: 0.25)),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: const Text(
+                                'srv',
+                                style: TextStyle(
+                                  color: AppColors.accentPrimary,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w600,
+                                  letterSpacing: 0.5,
+                                ),
+                              ),
+                            ),
+                          ],
                         ],
                       ),
                       Text(
@@ -186,28 +215,56 @@ class _ClientRow extends StatelessWidget {
                   ),
                 )
               else
-                Semantics(
-                  button: true,
-                  label: 'Enviar archivo a ${client.appName}',
-                  child: TextButton.icon(
-                    onPressed: isOtherRow
-                        ? null
-                        : () {
-                            HapticFeedback.lightImpact();
-                            onSendFile(client.clientId, client.appName);
-                          },
-                    icon: const Icon(Icons.upload_rounded, size: 14),
-                    label:
-                        const Text('Enviar', style: TextStyle(fontSize: 12)),
-                    style: TextButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: AppSpacing.sm,
-                        vertical: 4,
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (client.isServer && onViewServer != null)
+                      Semantics(
+                        button: true,
+                        label: 'Ver archivos de ${client.appName}',
+                        child: TextButton.icon(
+                          onPressed: isOtherRow
+                              ? null
+                              : () {
+                                  HapticFeedback.lightImpact();
+                                  onViewServer!('http://${client.ip}:3001');
+                                },
+                          icon: const Icon(Icons.folder_open_rounded, size: 14),
+                          label: const Text('Ver', style: TextStyle(fontSize: 12)),
+                          style: TextButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: AppSpacing.sm,
+                              vertical: 4,
+                            ),
+                            minimumSize: Size.zero,
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            foregroundColor: AppColors.textSecondary,
+                          ),
+                        ),
                       ),
-                      minimumSize: Size.zero,
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    Semantics(
+                      button: true,
+                      label: 'Enviar archivo a ${client.appName}',
+                      child: TextButton.icon(
+                        onPressed: isOtherRow
+                            ? null
+                            : () {
+                                HapticFeedback.lightImpact();
+                                onSendFile(client.clientId, client.appName);
+                              },
+                        icon: const Icon(Icons.upload_rounded, size: 14),
+                        label: const Text('Enviar', style: TextStyle(fontSize: 12)),
+                        style: TextButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: AppSpacing.sm,
+                            vertical: 4,
+                          ),
+                          minimumSize: Size.zero,
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                      ),
                     ),
-                  ),
+                  ],
                 ),
             ],
           ),
