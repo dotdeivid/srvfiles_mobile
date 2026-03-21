@@ -1,13 +1,18 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'theme/app_theme.dart';
+import 'theme/app_colors.dart';
+import 'screens/splash_screen.dart';
+import 'services/notification_service.dart';
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await NotificationService().init();
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(
       statusBarColor: Colors.transparent,
       statusBarIconBrightness: Brightness.light,
-      systemNavigationBarColor: Color(0xFF0a0a0f),
+      systemNavigationBarColor: AppColors.bgPrimary,
       systemNavigationBarIconBrightness: Brightness.light,
     ),
   );
@@ -22,22 +27,8 @@ class SrvFilesApp extends StatelessWidget {
     return MaterialApp(
       title: 'SrvFiles',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        brightness: Brightness.dark,
-        scaffoldBackgroundColor: const Color(0xFF0a0a0f),
-      ),
-      home: const Scaffold(
-        body: Center(
-          child: Text(
-            'SrvFiles',
-            style: TextStyle(
-              fontSize: 24,
-              fontWeight: FontWeight.bold,
-              color: Color(0xFFe2e8f0),
-            ),
-          ),
-        ),
-      ),
+      theme: AppTheme.dark,
+      home: const SplashScreen(),
     );
   }
 }
