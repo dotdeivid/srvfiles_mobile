@@ -27,6 +27,7 @@ import '../widgets/qr_footer.dart';
 import '../widgets/upload_sheet.dart';
 import '../widgets/online_clients.dart';
 import '../widgets/incoming_transfer_dialog.dart';
+import '../widgets/name_dialog.dart';
 import '../widgets/pulsing_dot.dart';
 import '../widgets/skeleton_loader.dart';
 import '../services/notification_service.dart';
@@ -493,6 +494,16 @@ class _HomeScreenState extends State<HomeScreen> {
 
   // ─── Utilidades ───────────────────────────────────────────────────
 
+  Future<void> _renameDevice() async {
+    final newName = await NameDialog.show(context, _deviceName);
+    if (newName == null || !mounted) return;
+    final trimmed = newName.trim();
+    if (trimmed.isEmpty) return;
+    await _deviceNameService.saveName(trimmed);
+    setState(() => _deviceName = trimmed);
+    _transferService.rename(trimmed);
+  }
+
   String _generateTransferId() {
     // Genera un UUID v4 simple (mismo formato que crypto.randomUUID del web)
     final now = DateTime.now().microsecondsSinceEpoch;
@@ -755,6 +766,8 @@ class _HomeScreenState extends State<HomeScreen> {
               padding: EdgeInsets.only(right: AppSpacing.xs),
               child: PulsingDot(size: 8),
             ),
+          // Chip de nombre del dispositivo — tappable para renombrar
+          _buildDeviceNameChip(),
           // Label de servidor tappable
           _buildServerLabel(),
           const SizedBox(width: AppSpacing.sm),
@@ -892,6 +905,38 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _buildLoading() {
     return const SkeletonLoader();
+  }
+
+  Widget _buildDeviceNameChip() {
+    if (_deviceName.isEmpty) return const SizedBox.shrink();
+    return InkWell(
+      borderRadius: BorderRadius.circular(8),
+      onTap: _renameDevice,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.sm,
+          vertical: AppSpacing.xs,
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.person_rounded,
+              size: 13,
+              color: AppColors.textMuted.withValues(alpha: 0.7),
+            ),
+            const SizedBox(width: 4),
+            Text(
+              _deviceName,
+              style: const TextStyle(
+                color: AppColors.textMuted,
+                fontSize: 11,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Widget _buildServerLabel() {

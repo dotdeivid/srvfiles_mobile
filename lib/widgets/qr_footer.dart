@@ -35,11 +35,6 @@ class QrFooter extends StatelessWidget {
             'Accedé desde otro dispositivo',
             style: theme.textTheme.titleSmall,
           ),
-          const SizedBox(height: AppSpacing.xs),
-          Text(
-            'Escaneá el código QR para abrir la app',
-            style: theme.textTheme.bodySmall,
-          ),
           const SizedBox(height: AppSpacing.md),
 
           // QR Code
