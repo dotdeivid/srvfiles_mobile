@@ -278,7 +278,7 @@ void main() {
       ));
 
       expect(find.text('MacBook Air'), findsOneWidget);
-      expect(find.byIcon(Icons.computer), findsOneWidget);
+      expect(find.byIcon(Icons.language), findsOneWidget);
     });
 
     testWidgets('shows mobile icon for mobile client', (tester) async {
@@ -344,7 +344,7 @@ void main() {
 
       expect(find.text('Desktop'), findsOneWidget);
       expect(find.text('Phone'), findsOneWidget);
-      expect(find.byIcon(Icons.computer), findsOneWidget);
+      expect(find.byIcon(Icons.language), findsOneWidget);
       expect(find.byIcon(Icons.phone_android), findsOneWidget);
     });
   });
