@@ -12,7 +12,7 @@ class FileListItem extends StatelessWidget {
     super.key,
     required this.file,
     required this.onDownload,
-    required this.onShare,
+    this.onShare,
     this.onCopyLink,
     this.onDelete,
     this.downloadIcon = Icons.download_rounded,
@@ -21,7 +21,7 @@ class FileListItem extends StatelessWidget {
 
   final FileInfo file;
   final VoidCallback onDownload;
-  final VoidCallback onShare;
+  final VoidCallback? onShare;
   final VoidCallback? onCopyLink;
   final VoidCallback? onDelete;
   /// Ícono del botón de acción principal (descarga/abrir).
@@ -93,14 +93,15 @@ class FileListItem extends StatelessWidget {
                 onDownload();
               },
             ),
-            _ContextMenuItem(
-              icon: Icons.share_rounded,
-              label: 'Compartir',
-              onTap: () {
-                Navigator.of(ctx).pop();
-                onShare();
-              },
-            ),
+            if (onShare != null)
+              _ContextMenuItem(
+                icon: Icons.share_rounded,
+                label: 'Compartir',
+                onTap: () {
+                  Navigator.of(ctx).pop();
+                  onShare!();
+                },
+              ),
             if (onCopyLink != null)
               _ContextMenuItem(
                 icon: Icons.link_rounded,
@@ -192,20 +193,36 @@ class FileListItem extends StatelessWidget {
                   visualDensity: VisualDensity.compact,
                 ),
               ),
-              Semantics(
-                button: true,
-                label: 'Compartir ${file.name}',
-                child: IconButton(
-                  icon: const Icon(Icons.share_rounded, size: 20),
-                  color: AppColors.textSecondary,
-                  onPressed: () {
-                    HapticFeedback.lightImpact();
-                    onShare();
-                  },
-                  tooltip: 'Compartir',
-                  visualDensity: VisualDensity.compact,
+              if (onShare != null)
+                Semantics(
+                  button: true,
+                  label: 'Compartir ${file.name}',
+                  child: IconButton(
+                    icon: const Icon(Icons.share_rounded, size: 20),
+                    color: AppColors.textSecondary,
+                    onPressed: () {
+                      HapticFeedback.lightImpact();
+                      onShare!();
+                    },
+                    tooltip: 'Compartir',
+                    visualDensity: VisualDensity.compact,
+                  ),
                 ),
-              ),
+              if (onDelete != null)
+                Semantics(
+                  button: true,
+                  label: 'Eliminar ${file.name}',
+                  child: IconButton(
+                    icon: const Icon(Icons.delete_outline_rounded, size: 20),
+                    color: AppColors.danger,
+                    onPressed: () {
+                      HapticFeedback.lightImpact();
+                      onDelete!();
+                    },
+                    tooltip: 'Eliminar',
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ),
             ],
           ),
         ),

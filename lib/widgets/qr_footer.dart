@@ -59,17 +59,6 @@ class QrFooter extends StatelessWidget {
               ),
             ),
           ),
-          const SizedBox(height: AppSpacing.sm),
-
-          // URL
-          Text(
-            lanUrl,
-            style: const TextStyle(
-              fontSize: 12,
-              color: AppColors.textAccent,
-              fontFamily: 'monospace',
-            ),
-          ),
           const SizedBox(height: AppSpacing.lg),
 
           // Copyright

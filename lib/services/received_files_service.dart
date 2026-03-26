@@ -3,7 +3,8 @@ import 'package:path_provider/path_provider.dart';
 import '../models/file_info.dart';
 
 /// Gestiona el directorio local de archivos recibidos por P2P.
-/// Los archivos se guardan en Documents/SrvFiles/received/.
+/// En Android: Download/SrvFiles/received/ (público, visible para galería/archivos).
+/// En otros: Documents/SrvFiles/received/.
 class ReceivedFilesService {
   Directory? _dir;
 
@@ -13,7 +14,15 @@ class ReceivedFilesService {
   /// Obtiene (y crea si no existe) el directorio de archivos recibidos.
   Future<Directory> getDirectory() async {
     if (_dir != null) return _dir!;
-    final baseDir = await getApplicationDocumentsDirectory();
+    Directory baseDir;
+    if (Platform.isAndroid) {
+      final publicDownloads = Directory('/storage/emulated/0/Download');
+      baseDir = await publicDownloads.exists()
+          ? publicDownloads
+          : await getApplicationDocumentsDirectory();
+    } else {
+      baseDir = await getApplicationDocumentsDirectory();
+    }
     final dir = Directory('${baseDir.path}/SrvFiles/received');
     if (!await dir.exists()) {
       await dir.create(recursive: true);

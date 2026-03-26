@@ -4,8 +4,6 @@ import '../theme/app_colors.dart';
 import '../widgets/gradient_text.dart';
 import '../widgets/pulsing_dot.dart';
 import '../services/discovery_service.dart';
-import '../services/device_name_service.dart';
-import '../widgets/name_dialog.dart';
 import 'home_screen.dart';
 
 const String _lastServerKey = 'srvfiles-last-server';
@@ -19,7 +17,6 @@ class SplashScreen extends StatefulWidget {
 
 class _SplashScreenState extends State<SplashScreen> {
   final _discoveryService = DiscoveryService();
-  final _deviceNameService = DeviceNameService();
 
   bool _searching = true;
   String? _error;
@@ -78,18 +75,9 @@ class _SplashScreenState extends State<SplashScreen> {
     await prefs.setString(_lastServerKey, url);
   }
 
-  Future<void> _ensureDeviceName() async {
-    final isFirst = await _deviceNameService.isFirstLaunch();
-    if (isFirst && mounted) {
-      final defaultName = _deviceNameService.generateRandomName();
-      final chosenName = await NameDialog.show(context, defaultName);
-      await _deviceNameService.saveName(chosenName ?? defaultName);
-    }
-  }
 
   Future<void> _onServerSelected(String serverUrl) async {
     await _saveLastServer(serverUrl);
-    await _ensureDeviceName();
     if (mounted) {
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(builder: (_) => HomeScreen(serverUrl: serverUrl)),
@@ -98,10 +86,19 @@ class _SplashScreenState extends State<SplashScreen> {
   }
 
   Future<void> _onSkipServer() async {
-    await _ensureDeviceName();
     if (mounted) {
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(builder: (_) => const HomeScreen(serverUrl: null)),
+      );
+    }
+  }
+
+  Future<void> _onBeServer() async {
+    if (mounted) {
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (_) => const HomeScreen(serverUrl: null, autoServerMode: true),
+        ),
       );
     }
   }
@@ -271,7 +268,22 @@ class _SplashScreenState extends State<SplashScreen> {
                   style: OutlinedButton.styleFrom(
                     side: const BorderSide(color: AppColors.borderMedium),
                   ),
-                  child: const Text('Omitir servidor'),
+                  child: const Text('Envío directo'),
+                ),
+              ),
+
+              const SizedBox(height: AppSpacing.lg),
+
+              Center(
+                child: TextButton(
+                  onPressed: _searching ? null : _onBeServer,
+                  style: TextButton.styleFrom(
+                    foregroundColor: AppColors.textMuted,
+                  ),
+                  child: const Text(
+                    'Usar este dispositivo como servidor',
+                    style: TextStyle(fontSize: 13),
+                  ),
                 ),
               ),
             ],

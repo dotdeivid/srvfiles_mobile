@@ -65,6 +65,14 @@ dependencies:
   # Abrir URLs en el navegador externo
   url_launcher: ^6.3.0
 
+  # Hash SHA-256 para el PIN del servidor
+  crypto: ^3.0.3
+
+  # Parsing de multipart/form-data en el servidor embebido
+  mime: ^1.0.6
+
+  # Espacio en disco del dispositivo (total y libre)
+
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
@@ -101,10 +109,11 @@ flutter:
   # the material Icons class.
   uses-material-design: true
 
-  # To add assets to your application, add an assets section, like this:
-  # assets:
-  #   - images/a_dot_burr.jpeg
-  #   - images/a_dot_ham.jpeg
+  assets:
+    # Frontend web embebido — copiar el output de `npm run build` (frontend/dist/)
+    # a esta carpeta antes de compilar la app.
+    - assets/www/
+    - assets/www/assets/
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

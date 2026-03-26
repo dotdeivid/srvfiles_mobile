@@ -15,12 +15,15 @@ class AppConfig {
     required this.lanUrl,
   });
 
-  factory AppConfig.fromJson(Map<String, dynamic> json) => AppConfig(
-        appName: json['appName'] as String,
-        lanIp: json['lanIp'] as String,
-        port: json['port'] as int,
-        frontendPort: json['frontendPort'] as int,
-        maxFileSizeMb: json['maxFileSizeMb'] as int,
-        lanUrl: json['lanUrl'] as String,
-      );
+  factory AppConfig.fromJson(Map<String, dynamic> json) {
+    final port = (json['port'] as num).toInt();
+    return AppConfig(
+      appName: (json['appName'] as String?) ?? 'SrvFiles',
+      lanIp: (json['lanIp'] as String?) ?? '',
+      port: port,
+      frontendPort: (json['frontendPort'] as num?)?.toInt() ?? port,
+      maxFileSizeMb: (json['maxFileSizeMb'] as num?)?.toInt() ?? 0,
+      lanUrl: (json['lanUrl'] as String?) ?? '',
+    );
+  }
 }

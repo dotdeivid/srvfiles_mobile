@@ -8,12 +8,22 @@ import '../models/app_config.dart';
 
 class FilesService {
   final ApiConfig _config;
+  String? _sessionToken;
 
   FilesService(this._config);
 
+  /// Guarda el token de sesión para incluirlo en todas las requests.
+  void setToken(String token) => _sessionToken = token;
+
+  Map<String, String> get _authHeaders =>
+      _sessionToken != null ? {'X-SrvFiles-Token': _sessionToken!} : {};
+
+  /// Expone headers de autenticación para uso externo (ej: descargas).
+  Map<String, String> get authHeaders => _authHeaders;
+
   /// Obtiene la lista de archivos del servidor.
   Future<List<FileInfo>> getFiles() async {
-    final response = await http.get(Uri.parse(_config.filesUrl));
+    final response = await http.get(Uri.parse(_config.filesUrl), headers: _authHeaders);
     if (response.statusCode != 200) {
       throw Exception('Error al obtener archivos: ${response.statusCode}');
     }
@@ -32,7 +42,7 @@ class FilesService {
     final request = http.MultipartRequest(
       'POST',
       Uri.parse(_config.uploadUrl),
-    );
+    )..headers.addAll(_authHeaders);
     final fileLength = await file.length();
     request.files.add(
       http.MultipartFile(
@@ -61,7 +71,7 @@ class FilesService {
     final request = http.MultipartRequest(
       'POST',
       Uri.parse(_config.uploadUrl),
-    );
+    )..headers.addAll(_authHeaders);
 
     for (final file in files) {
       final fileLength = await file.length();
@@ -88,13 +98,14 @@ class FilesService {
   Future<bool> deleteFile(String filename) async {
     final response = await http.delete(
       Uri.parse('${_config.filesUrl}/${Uri.encodeComponent(filename)}'),
+      headers: _authHeaders,
     );
     return response.statusCode == 200;
   }
 
   /// Obtiene estadísticas de uso de disco.
   Future<DiskStats> getStats() async {
-    final response = await http.get(Uri.parse(_config.statsUrl));
+    final response = await http.get(Uri.parse(_config.statsUrl), headers: _authHeaders);
     if (response.statusCode != 200) {
       throw Exception('Error al obtener stats: ${response.statusCode}');
     }
@@ -103,7 +114,7 @@ class FilesService {
 
   /// Obtiene la configuración del servidor.
   Future<AppConfig> getConfig() async {
-    final response = await http.get(Uri.parse(_config.configUrl));
+    final response = await http.get(Uri.parse(_config.configUrl), headers: _authHeaders);
     if (response.statusCode != 200) {
       throw Exception('Error al obtener config: ${response.statusCode}');
     }

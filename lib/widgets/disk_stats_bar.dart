@@ -57,7 +57,7 @@ class DiskStatsBar extends StatelessWidget {
     );
 
     final label = Text(
-      '${formatBytes(s.used)} / ${formatBytes(s.total)}',
+      '${formatBytes(s.free)} / ${formatBytes(s.total)}',
       style: const TextStyle(
         fontSize: 10,
         color: AppColors.textMuted,

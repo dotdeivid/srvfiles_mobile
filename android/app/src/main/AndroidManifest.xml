@@ -3,6 +3,14 @@
     <!-- Acceso a internet para conectarse al servidor en la LAN -->
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- Mantener CPU activa y conexión de red al bloquear pantalla -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+
+    <!-- Notificaciones (Android 13+) -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <!-- Leer archivos del almacenamiento (para subir) -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
 
@@ -42,6 +50,12 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- Foreground service para mantener la conexión activa con pantalla bloqueada -->
+        <service
+            android:name="com.dexterous.flutterlocalnotifications.ForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

@@ -10,9 +10,9 @@ class DiskStats {
   });
 
   factory DiskStats.fromJson(Map<String, dynamic> json) => DiskStats(
-        total: json['total'] as int,
-        used: json['used'] as int,
-        free: json['free'] as int,
+        total: (json['total'] as num?)?.toInt() ?? 0,
+        used: (json['used'] as num?)?.toInt() ?? 0,
+        free: (json['free'] as num?)?.toInt() ?? 0,
       );
 
   double get usedPercent => total > 0 ? (used / total) * 100 : 0;

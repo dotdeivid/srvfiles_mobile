@@ -20,8 +20,8 @@ class IncomingTransferRequest {
         transferId: json['transferId'] as String,
         from: json['from'] as String,
         fromName: json['fromName'] as String,
-        fileName: json['fileName'] as String,
-        fileSize: json['fileSize'] as int,
-        mimeType: json['mimeType'] as String,
+        fileName: (json['fileName'] as String?) ?? '',
+        fileSize: (json['fileSize'] as num?)?.toInt() ?? 0,
+        mimeType: (json['mimeType'] as String?) ?? 'application/octet-stream',
       );
 }

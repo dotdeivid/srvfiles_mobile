@@ -1,7 +1,7 @@
 # services/notification_service.dart
 
 **Archivo:** `lib/services/notification_service.dart`
-**Rol:** Singleton que encapsula el plugin de notificaciones locales. Muestra notificaciones del sistema cuando se completa una descarga o transferencia.
+**Rol:** Singleton que encapsula el plugin de notificaciones locales. Gestiona el foreground service de Android (notificación persistente) y muestra notificaciones del sistema cuando se completa una descarga o transferencia.
 
 ---
 
@@ -35,6 +35,23 @@ Future<void> init() async {
 Inicializa el plugin con la configuración específica de cada plataforma:
 - **Android**: `@mipmap/ic_launcher` es el ícono de la app que aparece en la notificación.
 - **iOS** (`DarwinInitializationSettings`): usa el nombre Darwin (el kernel de macOS/iOS) porque el plugin es multiplataforma Apple.
+
+---
+
+## Métodos `startForeground` y `stopForeground`
+
+```dart
+Future<void> startForeground() async { ... }
+Future<void> stopForeground() async { ... }
+```
+
+Controlan el **foreground service de Android**: una notificación persistente que mantiene vivo el proceso cuando la app está en segundo plano.
+
+`HomeScreen` los llama desde `didChangeAppLifecycleState`:
+- `startForeground()` al pasar a `AppLifecycleState.paused` (app minimizada o pantalla bloqueada).
+- `stopForeground()` al volver a `AppLifecycleState.resumed` (usuario abre la app de nuevo) y también en `dispose`.
+
+El foreground service **nunca está activo mientras el usuario usa la app en primer plano**.
 
 ---
 

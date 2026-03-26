@@ -1,15 +1,13 @@
 # services/embedded_relay.dart
 
 **Archivo:** `lib/services/embedded_relay.dart`
-**Rol:** Servidor relay WebSocket completo corriendo dentro de la app móvil. Permite que otros dispositivos en la red se conecten al celular como si fuera un servidor SrvFiles.
+**Rol:** Servidor HTTP + WebSocket completo corriendo dentro de la app móvil. Opera en dos modos: **relay puro** (solo WebSocket P2P) y **server mode** (REST API completa + frontend web embebido + WebSocket P2P).
 
 ---
 
-## Concepto: ¿Relay embebido en el móvil?
+## Concepto: ¿Servidor embebido en el móvil?
 
-La app de escritorio (Tauri) incluye un backend Node.js. Pero el móvil no puede incluir un proceso Node.js. En cambio, esta clase implementa el mismo relay WebSocket directamente en Dart usando `dart:io`.
-
-Cuando el relay está activo, el celular actúa como hub: otros dispositivos pueden conectarse a él, verse entre sí, y transferirse archivos P2P sin necesidad de ningún servidor externo.
+La app de escritorio (Tauri) incluye un backend Node.js. El móvil no puede incluir un proceso Node.js, pero implementa el mismo servidor directamente en Dart usando `dart:io`. Cuando el server mode está activo, cualquier navegador de la red puede abrir la IP del celular y ver la UI web completa de SrvFiles.
 
 ---
 
@@ -19,12 +17,13 @@ Cuando el relay está activo, el celular actúa como hub: otros dispositivos pue
 class EmbeddedRelay {
   HttpServer? _server;
   bool get isRunning => _server != null;
-  int? port;
-  String? localIp;
+  bool get isServerMode => _serverModeActive;
+  int get port => _port;
+  String? get localIp => _localIp;
+  String? get currentPin => _currentPin;  // PIN en texto plano mientras el servidor está activo
+  String? get url => isRunning ? 'http://$_localIp:$_port' : null;
 }
 ```
-
-`isRunning`, `port`, y `localIp` son leídos por `HomeScreen` para mostrar la dirección del relay en la AppBar.
 
 ---
 
@@ -32,83 +31,132 @@ class EmbeddedRelay {
 
 ```dart
 Future<void> start() async {
-  // Intentar puertos 3001, 3002, 3003...
   for (int tryPort = 3001; tryPort <= 3010; tryPort++) {
     try {
       _server = await HttpServer.bind(InternetAddress.anyIPv4, tryPort);
-      port = tryPort;
-      localIp = await _getLocalIp();
+      _port = tryPort;
+      _localIp = await _getLocalIp();
       _server!.listen(_handleRequest);
       return;
-    } catch (_) {
-      // Puerto ocupado, probar el siguiente
-    }
+    } catch (_) { /* Puerto ocupado, probar el siguiente */ }
   }
 }
 ```
 
-Intenta vincularse a los puertos 3001-3010. Si el 3001 está ocupado (por ejemplo, hay un servidor de escritorio en la misma máquina), prueba el 3002, etc. `InternetAddress.anyIPv4` (`0.0.0.0`) acepta conexiones de cualquier interfaz de red.
+Intenta vincularse a los puertos 3001-3010. `InternetAddress.anyIPv4` (`0.0.0.0`) acepta conexiones de cualquier interfaz de red.
 
 ---
 
-## Método `stop`
+## Método `startServerMode`
 
 ```dart
-Future<void> stop() async {
-  await _server?.close(force: true);
-  _server = null;
-  port = null;
+Future<String> startServerMode() async {
+  _serverModeActive = true;
+  final pin = _generatePin();
+  final hash = _hashPin(pin);
+  _pinHash = hash;
+  _currentPin = pin;    // Guardado en texto plano para mostrarlo en la UI
+  _validTokens.clear();
+  return pin;
+}
+
+void stopServerMode() {
+  _serverModeActive = false;
+  _pinHash = null;
+  _currentPin = null;
+  _validTokens.clear();
 }
 ```
 
+Activa el modo servidor: genera un PIN de 6 dígitos, lo hashea (SHA-256) para validación, y lo guarda en texto plano para mostrarlo en el ConnectSheet.
+
 ---
 
-## Método `_handleRequest`
+## Método `_handleRequest` — router principal
 
 ```dart
 void _handleRequest(HttpRequest request) {
-  final path = request.uri.path;
-  if (path == '/api/health') {
-    _handleHealth(request);
-  } else if (WebSocketTransformer.isUpgradeRequest(request)) {
-    _handleWebSocketUpgrade(request);
+  // Normalizar trailing slash
+  final path = request.uri.path.endsWith('/') && request.uri.path.length > 1
+      ? request.uri.path.substring(0, request.uri.path.length - 1)
+      : request.uri.path;
+
+  // Auth solo para rutas /api/ (los archivos estáticos son públicos)
+  if (_serverModeActive && path.startsWith('/api/')) {
+    if (!_checkAuth(request)) {
+      _sendJson(request, {'error': 'Unauthorized'}, status: 401);
+      return;
+    }
+  }
+
+  if (path == '/api/health')       { _handleHealth(request); }
+  else if (path == '/api/auth')    { _handleAuth(request); }
+  else if (path == '/api/pin')     { _handlePin(request); }
+  else if (path == '/api/config')  { _handleConfig(request); }
+  else if (path == '/api/files')   { _handleFiles(request); }
+  else if (path.startsWith('/api/files/')) { _handleFilesOp(request, path); }
+  else if (WebSocketTransformer.isUpgradeRequest(request)) { _handleWebSocketUpgrade(request); }
+  else { _serveStaticFile(request, path); }  // Frontend web embebido
+}
+```
+
+**Puntos clave:**
+- El trailing slash se normaliza para que `/api/files/` y `/api/files` funcionen igual.
+- La autenticación solo aplica a rutas `/api/` — los archivos estáticos son siempre públicos (necesario para que el browser cargue la app antes de autenticar).
+- Las rutas `/api/` desconocidas devuelven 404 JSON (no caen al handler de archivos estáticos).
+
+---
+
+## Endpoint `POST /api/auth`
+
+```dart
+void _handleAuth(HttpRequest request) async {
+  final body = jsonDecode(await utf8.decodeStream(request));
+  final pin = body['pin'] as String?;
+  if (_verifyPin(pin)) {
+    final token = _generateUuid();
+    _validTokens.add(token);
+    _sendJson(request, {'token': token});
   } else {
-    request.response
-      ..statusCode = HttpStatus.notFound
-      ..close();
+    _sendJson(request, {'error': 'PIN incorrecto'}, status: 401);
   }
 }
 ```
 
-El servidor HTTP nativo de Dart recibe todas las peticiones aquí. Se distinguen dos casos:
-- Petición GET a `/api/health`: responde con el JSON de estado para el descubrimiento.
-- Petición de upgrade a WebSocket: la maneja el relay.
-
-### `WebSocketTransformer.isUpgradeRequest`
-
-Una conexión WebSocket empieza como una petición HTTP normal con un header especial `Upgrade: websocket`. `WebSocketTransformer.isUpgradeRequest` detecta ese header.
-
 ---
 
-## Método `_handleHealth`
+## Endpoint `GET /api/pin`
 
 ```dart
-void _handleHealth(HttpRequest request) async {
-  final deviceName = await DeviceNameService().getName();
-  request.response
-    ..statusCode = HttpStatus.ok
-    ..headers.set('Content-Type', 'application/json')
-    ..headers.set('Access-Control-Allow-Origin', '*')
-    ..write(jsonEncode({
-      'status': 'ok',
-      'app': 'SrvFiles',
-      'appName': deviceName,
-    }))
-    ..close();
+void _handlePin(HttpRequest request) {
+  final remoteIp = request.connectionInfo?.remoteAddress.address ?? '';
+  final isLoopback = remoteIp == '127.0.0.1' || remoteIp == '::1';
+  if (!isLoopback) {
+    _sendJson(request, {'error': 'Forbidden'}, status: 403);
+    return;
+  }
+  _sendJson(request, {'pin': _currentPin ?? ''});
 }
 ```
 
-Responde con el mismo formato que el backend Node.js. `'app': 'SrvFiles'` es lo que verifica `DiscoveryService.probe()` para reconocer el servidor.
+Solo accesible desde loopback — el frontend web (servido por el propio relay) lo llama para auto-autenticarse sin que el usuario tenga que ingresar el PIN manualmente.
+
+---
+
+## Endpoint `GET /api/config`
+
+Devuelve todos los campos que el frontend espera:
+
+```dart
+_sendJson(request, {
+  'appName': deviceName,
+  'lanIp': _localIp,
+  'port': _port,
+  'frontendPort': _port,   // En mobile, frontend y backend usan el mismo puerto
+  'maxFileSizeMb': 0,
+  'lanUrl': 'http://$_localIp:$_port',
+});
+```
 
 ---
 
@@ -118,23 +166,39 @@ Responde con el mismo formato que el backend Node.js. `'app': 'SrvFiles'` es lo 
 void _handleWebSocketUpgrade(HttpRequest request) async {
   final ws = await WebSocketTransformer.upgrade(request);
   final clientId = _generateUuid();
-  final rawIp = request.connectionInfo?.remoteAddress.address ?? '';
-  // ...registro del cliente y listeners...
+
+  if (_serverModeActive) {
+    // Enviar auth_ok inmediatamente — el cliente enviará auth con token
+    ws.add(jsonEncode({'type': 'auth_ok'}));
+  } else {
+    // Relay puro: sin PIN, enviar auth_ok directamente
+    ws.add(jsonEncode({'type': 'auth_ok'}));
+  }
+  // ... registro del cliente y handlers de mensajes ...
 }
 ```
 
-Hace el handshake del upgrade y crea la conexión WebSocket. A partir de aquí, la lógica es idéntica a `handleConnection` en `transfer.service.ts` del backend:
-
-- Mensaje `hello` → registra cliente, envía `welcome`, hace broadcast.
-- Mensaje `send-request` → verifica receptor, crea sesión, reenvía.
-- Mensaje `send-accept` / `send-reject` / `send-cancel` / `send-complete` → notifica a la otra parte.
-- Mensaje binario → extrae `transferId` de los primeros 36 bytes, reenvía al receptor.
-- Cierre → elimina cliente, hace broadcast.
+El handshake WebSocket sigue el protocolo estándar: `auth` → `auth_ok` → `hello` → `welcome`.
 
 ---
 
-## Clases internas `_ConnectedClient` y `_TransferSession`
+## Archivos estáticos (`_serveStaticFile`)
 
+```dart
+void _serveStaticFile(HttpRequest request, String path) async {
+  final assetPath = path == '/' ? 'assets/www/index.html' : 'assets/www$path';
+  final data = await rootBundle.load(assetPath);
+  // ... detectar MIME type y enviar ...
+}
+```
+
+Sirve el frontend web compilado desde los assets de Flutter (`assets/www/`). Permite que cualquier navegador de la red abra `http://IP:puerto` y vea la UI.
+
+---
+
+## Clases internas
+
+### `_ConnectedClient`
 ```dart
 class _ConnectedClient {
   final WebSocket ws;
@@ -145,7 +209,10 @@ class _ConnectedClient {
   final String deviceType;
   final bool isServer;
 }
+```
 
+### `_TransferSession`
+```dart
 class _TransferSession {
   final String transferId;
   final String senderClientId;
@@ -156,26 +223,10 @@ class _TransferSession {
 }
 ```
 
-Equivalentes exactas a `ConnectedClient` y `TransferSession` del backend Node.js. El estado se guarda en Maps locales al relay:
+Equivalentes exactas a las del backend Node.js. El estado se guarda en Maps locales:
 
 ```dart
-final _clients = <String, _ConnectedClient>{};
+final _clients   = <String, _ConnectedClient>{};
 final _transfers = <String, _TransferSession>{};
+final _validTokens = <String>{};
 ```
-
----
-
-## Función `_generateUuid`
-
-```dart
-String _generateUuid() {
-  final rand = Random.secure();
-  final bytes = List.generate(16, (_) => rand.nextInt(256));
-  // Formato UUID v4: xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx
-  bytes[6] = (bytes[6] & 0x0f) | 0x40;
-  bytes[8] = (bytes[8] & 0x3f) | 0x80;
-  // ...formatear como hex con guiones...
-}
-```
-
-Genera un UUID v4 usando `Random.secure()` (generador criptográficamente seguro). Los bits 6 y 8 son modificados con operaciones de bitmask para cumplir con el estándar UUID v4.

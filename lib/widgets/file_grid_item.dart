@@ -15,12 +15,14 @@ class FileGridItem extends StatelessWidget {
     required this.onDownload,
     required this.onShare,
     this.onCopyLink,
+    this.onDelete,
   });
 
   final FileInfo file;
   final VoidCallback onDownload;
   final VoidCallback onShare;
   final VoidCallback? onCopyLink;
+  final VoidCallback? onDelete;
 
   void _showContextMenu(BuildContext context) {
     HapticFeedback.mediumImpact();
@@ -112,6 +114,19 @@ class FileGridItem extends StatelessWidget {
                   HapticFeedback.selectionClick();
                   Navigator.of(ctx).pop();
                   onCopyLink!();
+                },
+                dense: true,
+              ),
+            if (onDelete != null)
+              ListTile(
+                leading: const Icon(Icons.delete_outline_rounded,
+                    color: AppColors.danger, size: 22),
+                title: const Text('Eliminar',
+                    style: TextStyle(color: AppColors.danger, fontSize: 14)),
+                onTap: () {
+                  HapticFeedback.selectionClick();
+                  Navigator.of(ctx).pop();
+                  onDelete!();
                 },
                 dense: true,
               ),

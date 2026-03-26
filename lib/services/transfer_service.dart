@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import '../config/api_config.dart';
 import '../models/transfer_client.dart';
@@ -19,6 +20,7 @@ class TransferService {
   String? _clientId;
 
   // ─── Callbacks de eventos ────────────────────────────────────────
+  void Function()? onAuthOk;
   void Function(String clientId)? onWelcome;
   void Function(List<TransferClient> clients)? onClientsUpdate;
   void Function(IncomingTransferRequest request)? onSendRequest;
@@ -28,6 +30,7 @@ class TransferService {
   void Function(String transferId)? onSendComplete;
   void Function(String transferId, Uint8List data)? onBinaryChunk;
   void Function()? onDisconnected;
+  void Function()? onFilesChanged;
 
   StreamSubscription? _subscription;
   bool _disposed = false;
@@ -35,10 +38,23 @@ class TransferService {
   String? get clientId => _clientId;
   bool get isConnected => _channel != null && !_disposed;
 
+  // ─── Session token (para servidores con PIN) ──────────────────────
+  String? _sessionToken;
+  void Function()? onAuthRequired; // se dispara si el WS cierra con 4401
+
+  /// Guarda el token obtenido vía POST /api/auth.
+  void setToken(String token) => _sessionToken = token;
+
+  /// Limpia el token de sesión.
+  void clearToken() => _sessionToken = null;
+
+  /// Devuelve true si hay un token de sesión activo.
+  bool get hasToken => _sessionToken != null;
+
   /// Conecta al WebSocket del servidor.
+  /// Si hay un token disponible, lo envía como primer mensaje (auth handshake).
   /// Cierra cualquier conexión previa antes de abrir la nueva.
   void connect(ApiConfig config) {
-    // Cerrar la conexión anterior para evitar duplicados en el relay
     _subscription?.cancel();
     _channel?.sink.close();
 
@@ -49,12 +65,23 @@ class TransferService {
     _subscription = _channel!.stream.listen(
       _onMessage,
       onDone: () {
-        if (!_disposed) onDisconnected?.call();
+        if (_disposed) return;
+        final closeCode = _channel?.closeCode;
+        if (closeCode == 4401) {
+          onAuthRequired?.call();
+        } else {
+          onDisconnected?.call();
+        }
       },
       onError: (_) {
         if (!_disposed) onDisconnected?.call();
       },
     );
+
+    // Si tenemos token, autenticarse antes de registrar el cliente
+    if (_sessionToken != null) {
+      _sendJson({'type': 'auth', 'token': _sessionToken});
+    }
   }
 
   void _onMessage(dynamic message) {
@@ -82,16 +109,23 @@ class TransferService {
     try {
       final msg = jsonDecode(text) as Map<String, dynamic>;
       final type = msg['type'] as String?;
+      debugPrint('[TransferService] ← $type');
       switch (type) {
+        case 'auth_ok':
+          // Servidor confirmó el token — ahora registramos el cliente
+          onAuthOk?.call();
         case 'welcome':
           _clientId = msg['clientId'] as String;
+          debugPrint('[TransferService] clientId asignado: $_clientId');
           onWelcome?.call(_clientId!);
         case 'clients':
           final list = (msg['clients'] as List<dynamic>)
               .map((e) => TransferClient.fromJson(e as Map<String, dynamic>))
               .toList();
+          debugPrint('[TransferService] clients update: ${list.map((c) => '${c.appName}(${c.clientId})').join(', ')}');
           onClientsUpdate?.call(list);
         case 'send-request':
+          debugPrint('[TransferService] send-request recibido: ${msg['fileName']} de ${msg['fromName']}');
           onSendRequest?.call(IncomingTransferRequest.fromJson(msg));
         case 'send-accept':
           onSendAccept?.call(msg['transferId'] as String);
@@ -104,9 +138,11 @@ class TransferService {
           onSendCancel?.call(msg['transferId'] as String);
         case 'send-complete':
           onSendComplete?.call(msg['transferId'] as String);
+        case 'files-changed':
+          onFilesChanged?.call();
       }
-    } catch (_) {
-      // Ignorar mensajes malformados
+    } catch (e, st) {
+      debugPrint('[TransferService] ERROR procesando mensaje: $e\n$st\nMensaje: $text');
     }
   }
 
