@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import '../models/file_info.dart';
@@ -11,6 +12,12 @@ const _diskChannel = MethodChannel('com.srvfiles/disk_space');
 /// Separado de ReceivedFilesService para diferenciarlos visualmente.
 class MobileServerStorageService {
   Directory? _dir;
+
+  MobileServerStorageService();
+
+  /// Constructor para inyectar directorio en tests.
+  @visibleForTesting
+  MobileServerStorageService.forTesting(Directory dir) : _dir = dir;
 
   /// Obtiene (y crea si no existe) el directorio del servidor.
   Future<Directory> getDirectory() async {

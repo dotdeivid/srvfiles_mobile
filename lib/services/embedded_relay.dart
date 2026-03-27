@@ -403,7 +403,7 @@ class EmbeddedRelay {
       ..headers.contentType = ContentType.json
       ..write(jsonEncode({
         'status': 'ok',
-        'app': 'SrvFiles',
+        'app': 'srvfiles',
         'appName': _deviceName ?? 'SrvFiles',
         'relay': true,
         'serverMode': _serverModeActive,
