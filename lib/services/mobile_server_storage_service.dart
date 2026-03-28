@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import '../models/file_info.dart';
 import '../models/disk_stats.dart';
+import 'app_logger.dart';
 
 const _diskChannel = MethodChannel('com.srvfiles/disk_space');
 
@@ -55,30 +56,47 @@ class MobileServerStorageService {
 
   /// Guarda bytes en el directorio del servidor. Retorna el nombre final del archivo.
   Future<String> saveFile(String fileName, List<int> bytes) async {
-    final dir = await getDirectory();
-    final sanitized = _sanitize(fileName);
-    var target = File('${dir.path}/$sanitized');
+    try {
+      final dir = await getDirectory();
+      final sanitized = _sanitize(fileName);
+      var target = File('${dir.path}/$sanitized');
 
-    if (await target.exists()) {
-      final ext = sanitized.contains('.') ? '.${sanitized.split('.').last}' : '';
-      final base =
-          ext.isNotEmpty ? sanitized.substring(0, sanitized.length - ext.length) : sanitized;
-      var i = 1;
-      while (await target.exists()) {
-        target = File('${dir.path}/$base ($i)$ext');
-        i++;
+      if (await target.exists()) {
+        final ext = sanitized.contains('.') ? '.${sanitized.split('.').last}' : '';
+        final base =
+            ext.isNotEmpty ? sanitized.substring(0, sanitized.length - ext.length) : sanitized;
+        var i = 1;
+        while (await target.exists()) {
+          target = File('${dir.path}/$base ($i)$ext');
+          i++;
+        }
       }
-    }
 
-    await target.writeAsBytes(bytes);
-    return target.path.split('/').last;
+      await target.writeAsBytes(bytes);
+      final finalName = target.path.split('/').last;
+      AppLogger.instance.info('[MobileServerStorage] saved file: $finalName (${bytes.length} bytes)');
+      return finalName;
+    } catch (e) {
+      AppLogger.instance.error('[MobileServerStorage] saveFile failed', error: e);
+      rethrow;
+    }
   }
 
   /// Elimina un archivo por nombre.
   Future<void> deleteFile(String fileName) async {
-    final dir = await getDirectory();
-    final file = File('${dir.path}/$fileName');
-    if (await file.exists()) await file.delete();
+    try {
+      final dir = await getDirectory();
+      final file = File('${dir.path}/$fileName');
+      if (await file.exists()) {
+        await file.delete();
+        AppLogger.instance.info('[MobileServerStorage] deleted file: $fileName');
+      } else {
+        AppLogger.instance.warn('[MobileServerStorage] deleteFile: file not found: $fileName');
+      }
+    } catch (e) {
+      AppLogger.instance.error('[MobileServerStorage] deleteFile failed', error: e);
+      rethrow;
+    }
   }
 
   /// Retorna el path completo de un archivo por nombre. Null si no existe.
@@ -105,7 +123,9 @@ class MobileServerStorageService {
       final totalMb = await _diskChannel.invokeMethod<double>('getTotalDiskSpace');
       free = ((freeMb ?? 0) * 1024 * 1024).round();
       total = ((totalMb ?? 0) * 1024 * 1024).round();
-    } catch (_) {}
+    } catch (e) {
+      AppLogger.instance.warn('[MobileServerStorage] could not get disk space from platform channel: $e');
+    }
 
     return DiskStats(total: total, used: used, free: free);
   }

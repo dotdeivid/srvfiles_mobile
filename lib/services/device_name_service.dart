@@ -1,5 +1,6 @@
 import 'dart:math';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'app_logger.dart';
 
 const String _storageKey = 'srvfiles-device-name';
 
@@ -25,17 +26,30 @@ String _randomName() {
 class DeviceNameService {
   /// Obtiene el nombre guardado, o genera uno aleatorio si es la primera vez.
   Future<String> getName() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getString(_storageKey) ?? _randomName();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final name = prefs.getString(_storageKey) ?? _randomName();
+      AppLogger.instance.debug('[DeviceNameService] getName: $name');
+      return name;
+    } catch (e) {
+      AppLogger.instance.error('[DeviceNameService] getName failed', error: e);
+      return _randomName();
+    }
   }
 
   /// Guarda el nombre. Si está vacío, genera uno aleatorio.
   Future<String> saveName(String name) async {
-    final trimmed = name.trim();
-    final finalName = trimmed.isEmpty ? _randomName() : trimmed;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_storageKey, finalName);
-    return finalName;
+    try {
+      final trimmed = name.trim();
+      final finalName = trimmed.isEmpty ? _randomName() : trimmed;
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_storageKey, finalName);
+      AppLogger.instance.info('[DeviceNameService] name saved: $finalName');
+      return finalName;
+    } catch (e) {
+      AppLogger.instance.error('[DeviceNameService] saveName failed', error: e);
+      rethrow;
+    }
   }
 
   /// Devuelve true si es la primera vez que se abre la app (no hay nombre guardado).

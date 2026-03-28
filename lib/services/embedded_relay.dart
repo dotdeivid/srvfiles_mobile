@@ -8,6 +8,8 @@ import 'package:flutter/services.dart' show rootBundle;
 import 'package:mime/mime.dart';
 import 'mobile_server_storage_service.dart';
 import 'pin_service.dart';
+import 'app_logger.dart';
+import 'crypto_service.dart';
 
 /// Mini servidor HTTP + WebSocket relay embebido.
 ///
@@ -418,7 +420,8 @@ class EmbeddedRelay {
     WebSocket ws;
     try {
       ws = await WebSocketTransformer.upgrade(request);
-    } catch (_) {
+    } catch (e, st) {
+      AppLogger.instance.error('embedded_relay.dart: WebSocket upgrade fallido', error: e, stack: st);
       request.response
         ..statusCode = HttpStatus.badRequest
         ..write('WebSocket upgrade failed')
@@ -437,6 +440,9 @@ class EmbeddedRelay {
 
     _ConnectedClient? client;
     bool authenticated = !_serverModeActive; // relay-only: no auth needed
+    // Cipher negociado antes de que el cliente envíe hello.
+    // Se asigna al cliente cuando se registra con hello.
+    SessionCipher? pendingCipher;
 
     // En relay-only mode no hay PIN: enviar auth_ok inmediatamente para que
     // los clientes web (que esperan auth_ok antes de registrarse) puedan proceder.
@@ -450,161 +456,27 @@ class EmbeddedRelay {
         if (data is List<int>) {
           if (!authenticated) { ws.close(4401, 'Unauthorized'); return; }
           final buf = data is Uint8List ? data : Uint8List.fromList(data);
-          if (buf.length <= 36) return;
-          final transferId = utf8.decode(buf.sublist(0, 36)).trim();
-          final session = _transfers[transferId];
-          if (session == null) return;
-          final receiver = _clients[session.receiverClientId];
-          if (receiver != null) {
-            try { receiver.ws.add(buf); } catch (_) {}
-          }
+          // Relay cifrado/plano de chunks según el cifrado del emisor y receptor
+          unawaited(_relayBinaryFrame(buf, client?.cipher ?? pendingCipher));
           return;
         }
 
         if (data is! String) return;
-        Map<String, dynamic> msg;
-        try {
-          msg = jsonDecode(data) as Map<String, dynamic>;
-        } catch (_) {
-          return;
-        }
 
-        final type = msg['type'] as String?;
-
-        // ── WS auth — primer mensaje obligatorio en server mode ──
-        if (!authenticated) {
-          if (type != 'auth') { ws.close(4401, 'Unauthorized'); return; }
-          final token = msg['token'] as String? ?? '';
-          if (_sessions[token] != true) { ws.close(4401, 'Token inválido'); return; }
-          authenticated = true;
-          _send(ws, {'type': 'auth_ok'});
-          return;
-        }
-
-        // ── JSON signaling ──
-        switch (type) {
-          case 'auth':
-            // En relay-only mode no hay PIN, pero los clientes web siempre
-            // envían auth antes de registrarse y esperan auth_ok para continuar.
-            if (!_serverModeActive) {
-              _send(ws, {'type': 'auth_ok'});
-            }
-
-          case 'hello':
-            client = _ConnectedClient(
-              ws: ws,
-              clientId: clientId,
-              appName: (msg['appName'] as String?) ?? 'Unknown',
-              receiving: false,
-              ip: clientIp,
-              deviceType: msg['deviceType'] == 'mobile' ? 'mobile' : 'desktop',
-              isOwner: isLocalhost,
-            );
-            _clients[clientId] = client!;
-            debugPrint('[Relay] hello: ${client!.appName}($clientId) registrado. Total clientes: ${_clients.length}');
-            _send(ws, {'type': 'welcome', 'clientId': clientId});
-            _broadcastClients();
-
-          case 'set-receiving':
-            if (client == null) return;
-            client!.receiving = msg['receiving'] == true;
-            _broadcastClients();
-
-          case 'rename':
-            if (client == null) return;
-            final newName = ((msg['newName'] as String?) ?? '').trim();
-            if (newName.isNotEmpty) {
-              client!.appName = newName;
-              _broadcastClients();
-            }
-
-          case 'send-request':
-            if (client == null) {
-              debugPrint('[Relay] send-request ignorado: client == null para $clientId');
-              return;
-            }
-            final to = msg['to'] as String?;
-            final fileName = msg['fileName'] as String?;
-            final fileSize = (msg['fileSize'] as num?)?.toInt();
-            final mimeType = msg['mimeType'] as String?;
-            final transferId = msg['transferId'] as String?;
-            debugPrint('[Relay] send-request de ${client!.appName}($clientId) → to=$to fileName=$fileName fileSize=$fileSize clients=${_clients.keys.toList()}');
-            if (to == null || transferId == null) return;
-            final receiver = _clients[to];
-            if (receiver == null) {
-              debugPrint('[Relay] send-request: receptor $to no encontrado, rechazando');
-              _send(ws, {'type': 'send-reject', 'transferId': transferId, 'reason': 'offline'});
-              return;
-            }
-            _transfers[transferId] = _TransferSession(
-              transferId: transferId,
-              senderClientId: clientId,
-              receiverClientId: to,
-              fileName: fileName ?? '',
-              fileSize: fileSize ?? 0,
-              mimeType: mimeType ?? 'application/octet-stream',
-            );
-            debugPrint('[Relay] send-request: enviando a ${receiver.appName}($to)');
-            _send(receiver.ws, {
-              'type': 'send-request',
-              'from': clientId,
-              'fromName': client!.appName,
-              'fileName': fileName ?? '',
-              'fileSize': fileSize ?? 0,
-              'mimeType': mimeType ?? 'application/octet-stream',
-              'transferId': transferId,
-            });
-
-          case 'send-accept':
-            if (client == null) return;
-            final transferId = msg['transferId'] as String?;
-            if (transferId == null) return;
-            final session = _transfers[transferId];
-            if (session == null || session.receiverClientId != clientId) return;
-            final sender = _clients[session.senderClientId];
-            if (sender != null) {
-              _send(sender.ws, {'type': 'send-accept', 'transferId': transferId});
-            }
-
-          case 'send-reject':
-            if (client == null) return;
-            final transferId = msg['transferId'] as String?;
-            if (transferId == null) return;
-            final session = _transfers[transferId];
-            if (session == null || session.receiverClientId != clientId) return;
-            final sender = _clients[session.senderClientId];
-            if (sender != null) {
-              _send(sender.ws, {'type': 'send-reject', 'transferId': transferId});
-            }
-            _transfers.remove(transferId);
-
-          case 'send-cancel':
-            if (client == null) return;
-            final transferId = msg['transferId'] as String?;
-            if (transferId == null) return;
-            final session = _transfers[transferId];
-            if (session == null) return;
-            final otherId = session.senderClientId == clientId
-                ? session.receiverClientId
-                : session.senderClientId;
-            final other = _clients[otherId];
-            if (other != null) {
-              _send(other.ws, {'type': 'send-cancel', 'transferId': transferId});
-            }
-            _transfers.remove(transferId);
-
-          case 'send-complete':
-            if (client == null) return;
-            final transferId = msg['transferId'] as String?;
-            if (transferId == null) return;
-            final session = _transfers[transferId];
-            if (session == null || session.senderClientId != clientId) return;
-            final receiver = _clients[session.receiverClientId];
-            if (receiver != null) {
-              _send(receiver.ws, {'type': 'send-complete', 'transferId': transferId});
-            }
-            _transfers.remove(transferId);
-        }
+        // ── Decode + optional decrypt ──
+        unawaited(_processJsonMessage(
+          ws: ws,
+          data: data,
+          clientId: clientId,
+          clientIp: clientIp,
+          isLocalhost: isLocalhost,
+          authenticated: () => authenticated,
+          setAuthenticated: (v) => authenticated = v,
+          getClient: () => client,
+          setClient: (c) => client = c,
+          getPendingCipher: () => pendingCipher,
+          setPendingCipher: (c) => pendingCipher = c,
+        ));
       },
       onDone: () {
         if (client != null) {
@@ -621,6 +493,234 @@ class EmbeddedRelay {
     );
   }
 
+  /// Procesa un mensaje JSON (con soporte de cifrado).
+  Future<void> _processJsonMessage({
+    required WebSocket ws,
+    required String data,
+    required String clientId,
+    required String clientIp,
+    required bool isLocalhost,
+    required bool Function() authenticated,
+    required void Function(bool) setAuthenticated,
+    required _ConnectedClient? Function() getClient,
+    required void Function(_ConnectedClient) setClient,
+    required SessionCipher? Function() getPendingCipher,
+    required void Function(SessionCipher?) setPendingCipher,
+  }) async {
+    Map<String, dynamic> msg;
+    try {
+      final raw = jsonDecode(data) as Map<String, dynamic>;
+      // Decrypt if in encrypted mode and frame is wrapped
+      final cipher = getPendingCipher() ?? getClient()?.cipher;
+      if (cipher != null && raw['type'] == 'encrypted') {
+        final decrypted = await cipher.decryptJson(
+          raw['iv'] as String,
+          raw['data'] as String,
+        );
+        msg = jsonDecode(decrypted) as Map<String, dynamic>;
+      } else {
+        msg = raw;
+      }
+    } catch (e) {
+      AppLogger.instance.error('embedded_relay.dart: error al decodificar/descifrar mensaje WS', error: e);
+      return;
+    }
+
+    final type = msg['type'] as String?;
+
+    // ── WS auth — primer mensaje obligatorio en server mode ──
+    if (!authenticated()) {
+      if (type != 'auth') { ws.close(4401, 'Unauthorized'); return; }
+      final token = msg['token'] as String? ?? '';
+      if (_sessions[token] != true) { ws.close(4401, 'Token inválido'); return; }
+      setAuthenticated(true);
+      _send(ws, {'type': 'auth_ok'});
+      return;
+    }
+
+    // ── JSON signaling ──
+    switch (type) {
+      case 'auth':
+        // En relay-only mode no hay PIN, pero los clientes web siempre
+        // envían auth antes de registrarse y esperan auth_ok para continuar.
+        if (!_serverModeActive) {
+          _send(ws, {'type': 'auth_ok'});
+        }
+
+      case 'key-exchange':
+        // Perform server-side ECDH key exchange
+        final clientPubKeyB64 = msg['publicKey'] as String? ?? '';
+        if (clientPubKeyB64.isEmpty) return;
+        try {
+          final result = await CryptoService.serverKeyExchange(clientPubKeyB64);
+          // Set cipher before sending response (client won't derive until it receives response)
+          setPendingCipher(result.cipher);
+          final c = getClient();
+          if (c != null) c.cipher = result.cipher;
+          // Send key-exchange response in plaintext (cipher not active yet on client)
+          _send(ws, {'type': 'key-exchange', 'publicKey': result.serverPublicKey});
+          AppLogger.instance.debug('embedded_relay.dart: key exchange completo para $clientId');
+        } catch (e, st) {
+          AppLogger.instance.error('embedded_relay.dart: key exchange fallido', error: e, stack: st);
+        }
+
+      case 'hello':
+        final newClient = _ConnectedClient(
+          ws: ws,
+          clientId: clientId,
+          appName: (msg['appName'] as String?) ?? 'Unknown',
+          receiving: false,
+          ip: clientIp,
+          deviceType: msg['deviceType'] == 'mobile' ? 'mobile' : 'desktop',
+          isOwner: isLocalhost,
+          cipher: getPendingCipher(),  // assign cipher if key exchange was done
+        );
+        setClient(newClient);
+        _clients[clientId] = newClient;
+        debugPrint('[Relay] hello: ${newClient.appName}($clientId) registrado (encrypted=${newClient.cipher != null}). Total: ${_clients.length}');
+        _send(ws, {'type': 'welcome', 'clientId': clientId}, newClient.cipher);
+        _broadcastClients();
+
+      case 'set-receiving':
+        final c = getClient();
+        if (c == null) return;
+        c.receiving = msg['receiving'] == true;
+        _broadcastClients();
+
+      case 'rename':
+        final c = getClient();
+        if (c == null) return;
+        final newName = ((msg['newName'] as String?) ?? '').trim();
+        if (newName.isNotEmpty) {
+          c.appName = newName;
+          _broadcastClients();
+        }
+
+      case 'send-request':
+        final c = getClient();
+        if (c == null) {
+          debugPrint('[Relay] send-request ignorado: client == null para $clientId');
+          return;
+        }
+        final to = msg['to'] as String?;
+        final fileName = msg['fileName'] as String?;
+        final fileSize = (msg['fileSize'] as num?)?.toInt();
+        final mimeType = msg['mimeType'] as String?;
+        final transferId = msg['transferId'] as String?;
+        if (to == null || transferId == null) return;
+        final receiver = _clients[to];
+        if (receiver == null) {
+          debugPrint('[Relay] send-request: receptor $to no encontrado');
+          _send(ws, {'type': 'send-reject', 'transferId': transferId, 'reason': 'offline'}, c.cipher);
+          return;
+        }
+        _transfers[transferId] = _TransferSession(
+          transferId: transferId,
+          senderClientId: clientId,
+          receiverClientId: to,
+          fileName: fileName ?? '',
+          fileSize: fileSize ?? 0,
+          mimeType: mimeType ?? 'application/octet-stream',
+        );
+        _send(receiver.ws, {
+          'type': 'send-request',
+          'from': clientId,
+          'fromName': c.appName,
+          'fileName': fileName ?? '',
+          'fileSize': fileSize ?? 0,
+          'mimeType': mimeType ?? 'application/octet-stream',
+          'transferId': transferId,
+        }, receiver.cipher);
+
+      case 'send-accept':
+        final c = getClient();
+        if (c == null) return;
+        final transferId = msg['transferId'] as String?;
+        if (transferId == null) return;
+        final session = _transfers[transferId];
+        if (session == null || session.receiverClientId != clientId) return;
+        final sender = _clients[session.senderClientId];
+        if (sender != null) {
+          _send(sender.ws, {'type': 'send-accept', 'transferId': transferId}, sender.cipher);
+        }
+
+      case 'send-reject':
+        final c = getClient();
+        if (c == null) return;
+        final transferId = msg['transferId'] as String?;
+        if (transferId == null) return;
+        final session = _transfers[transferId];
+        if (session == null || session.receiverClientId != clientId) return;
+        final sender = _clients[session.senderClientId];
+        if (sender != null) {
+          _send(sender.ws, {'type': 'send-reject', 'transferId': transferId}, sender.cipher);
+        }
+        _transfers.remove(transferId);
+
+      case 'send-cancel':
+        final c = getClient();
+        if (c == null) return;
+        final transferId = msg['transferId'] as String?;
+        if (transferId == null) return;
+        final session = _transfers[transferId];
+        if (session == null) return;
+        final otherId = session.senderClientId == clientId
+            ? session.receiverClientId
+            : session.senderClientId;
+        final other = _clients[otherId];
+        if (other != null) {
+          _send(other.ws, {'type': 'send-cancel', 'transferId': transferId}, other.cipher);
+        }
+        _transfers.remove(transferId);
+
+      case 'send-complete':
+        final c = getClient();
+        if (c == null) return;
+        final transferId = msg['transferId'] as String?;
+        if (transferId == null) return;
+        final session = _transfers[transferId];
+        if (session == null || session.senderClientId != clientId) return;
+        final receiver = _clients[session.receiverClientId];
+        if (receiver != null) {
+          _send(receiver.ws, {'type': 'send-complete', 'transferId': transferId}, receiver.cipher);
+        }
+        _transfers.remove(transferId);
+    }
+  }
+
+  /// Retransmite un chunk binario al receptor correcto, cifrando/descifrando según corresponda.
+  Future<void> _relayBinaryFrame(Uint8List buf, SessionCipher? senderCipher) async {
+    Uint8List payload;
+    if (senderCipher != null) {
+      try {
+        payload = await senderCipher.decryptBinary(buf);
+      } catch (e) {
+        AppLogger.instance.error('embedded_relay.dart: fallo al descifrar chunk binario', error: e);
+        return;
+      }
+    } else {
+      payload = buf;
+    }
+
+    if (payload.length <= 36) return;
+    final transferId = utf8.decode(payload.sublist(0, 36)).trim();
+    final session = _transfers[transferId];
+    if (session == null) return;
+    final receiver = _clients[session.receiverClientId];
+    if (receiver == null) return;
+
+    if (receiver.cipher != null) {
+      try {
+        final encrypted = await receiver.cipher!.encryptBinary(payload);
+        receiver.ws.add(encrypted);
+      } catch (e) {
+        AppLogger.instance.error('embedded_relay.dart: fallo al cifrar chunk para receptor', error: e);
+      }
+    } else {
+      try { receiver.ws.add(payload); } catch (_) {}
+    }
+  }
+
   // ─── Helpers ──────────────────────────────────────────────────────
 
   void _jsonOk(HttpRequest req, Map<String, dynamic> body) {
@@ -635,14 +735,26 @@ class EmbeddedRelay {
     return Uri.decodeComponent(path.substring(prefix.length));
   }
 
-  void _send(WebSocket ws, Map<String, dynamic> msg) {
-    try { ws.add(jsonEncode(msg)); } catch (_) {}
+  /// Sends a JSON message to [ws]. If [cipher] is provided the message is encrypted.
+  void _send(WebSocket ws, Map<String, dynamic> msg, [SessionCipher? cipher]) {
+    if (cipher == null) {
+      try { ws.add(jsonEncode(msg)); } catch (_) {}
+      return;
+    }
+    unawaited(_sendEncrypted(ws, msg, cipher));
+  }
+
+  Future<void> _sendEncrypted(WebSocket ws, Map<String, dynamic> msg, SessionCipher cipher) async {
+    try {
+      final encrypted = await cipher.encryptJson(jsonEncode(msg));
+      ws.add(jsonEncode({'type': 'encrypted', ...encrypted}));
+    } catch (_) {}
   }
 
   void _broadcastFilesChanged() {
-    final data = jsonEncode({'type': 'files-changed'});
+    final msg = {'type': 'files-changed'};
     for (final client in _clients.values) {
-      try { client.ws.add(data); } catch (_) {}
+      _send(client.ws, msg, client.cipher);
     }
   }
 
@@ -657,9 +769,9 @@ class EmbeddedRelay {
               'isOwner': c.isOwner,
             })
         .toList();
-    final data = jsonEncode({'type': 'clients', 'clients': list});
+    final msg = {'type': 'clients', 'clients': list};
     for (final client in _clients.values) {
-      try { client.ws.add(data); } catch (_) {}
+      _send(client.ws, msg, client.cipher);
     }
   }
 
@@ -692,7 +804,9 @@ class EmbeddedRelay {
           if (!addr.isLoopback) return addr.address;
         }
       }
-    } catch (_) {}
+    } catch (e) {
+      AppLogger.instance.error('embedded_relay.dart: error al obtener IP local', error: e);
+    }
     return null;
   }
 }
@@ -708,6 +822,8 @@ class _ConnectedClient {
   final String deviceType;
   /// true si el cliente se conectó desde localhost (dueño del relay).
   final bool isOwner;
+  /// Cipher de sesión — null si el cliente no hizo key exchange (modo sin cifrado).
+  SessionCipher? cipher;
 
   _ConnectedClient({
     required this.ws,
@@ -717,6 +833,7 @@ class _ConnectedClient {
     required this.ip,
     required this.deviceType,
     this.isOwner = false,
+    this.cipher,
   });
 }
 

@@ -4,6 +4,7 @@ import '../theme/app_colors.dart';
 import '../widgets/gradient_text.dart';
 import '../widgets/pulsing_dot.dart';
 import '../services/discovery_service.dart';
+import '../services/app_logger.dart';
 import 'home_screen.dart';
 
 const String _lastServerKey = 'srvfiles-last-server';
@@ -43,30 +44,46 @@ class _SplashScreenState extends State<SplashScreen> {
     });
 
     // 1. Intentar con el último servidor guardado para mostrarlo rápido
-    final prefs = await SharedPreferences.getInstance();
-    final lastServer = prefs.getString(_lastServerKey);
-    if (lastServer != null) {
-      final server = await _discoveryService.probe(lastServer);
-      if (server != null && mounted) {
-        setState(() => _foundServers = [server]);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final lastServer = prefs.getString(_lastServerKey);
+      if (lastServer != null) {
+        AppLogger.instance.debug('[Splash] probing last server: $lastServer');
+        final server = await _discoveryService.probe(lastServer);
+        if (server != null && mounted) {
+          AppLogger.instance.info('[Splash] last server reachable: $lastServer');
+          setState(() => _foundServers = [server]);
+        }
       }
+    } catch (e) {
+      AppLogger.instance.warn('[Splash] error probing last server: $e');
     }
 
     // 2. Scan completo de la subred LAN
-    debugPrint('[Splash] Iniciando scan LAN...');
-    final servers = await _discoveryService.scanLan();
-    debugPrint('[Splash] Scan completado: ${servers.length} servidores');
+    AppLogger.instance.info('[Splash] starting LAN scan');
+    try {
+      final servers = await _discoveryService.scanLan();
+      AppLogger.instance.info('[Splash] LAN scan complete: ${servers.length} servers found');
 
-    if (mounted) {
-      final existing = _foundServers.map((s) => s.url).toSet();
-      final merged = [
-        ..._foundServers,
-        ...servers.where((s) => !existing.contains(s.url)),
-      ];
-      setState(() {
-        _foundServers = merged;
-        _searching = false;
-      });
+      if (mounted) {
+        final existing = _foundServers.map((s) => s.url).toSet();
+        final merged = [
+          ..._foundServers,
+          ...servers.where((s) => !existing.contains(s.url)),
+        ];
+        setState(() {
+          _foundServers = merged;
+          _searching = false;
+        });
+      }
+    } catch (e) {
+      AppLogger.instance.error('[Splash] LAN scan failed', error: e);
+      if (mounted) {
+        setState(() {
+          _searching = false;
+          _error = 'Error durante el escaneo: $e';
+        });
+      }
     }
   }
 
@@ -77,6 +94,7 @@ class _SplashScreenState extends State<SplashScreen> {
 
 
   Future<void> _onServerSelected(String serverUrl) async {
+    AppLogger.instance.info('[Splash] server selected: $serverUrl');
     await _saveLastServer(serverUrl);
     if (mounted) {
       Navigator.of(context).pushReplacement(
@@ -111,6 +129,7 @@ class _SplashScreenState extends State<SplashScreen> {
     if (!url.startsWith('http')) url = 'http://$url';
     if (!RegExp(r':\d+$').hasMatch(url)) url = '$url:3001';
 
+    AppLogger.instance.info('[Splash] manual connect attempt: $url');
     setState(() {
       _searching = true;
       _error = null;
@@ -119,11 +138,14 @@ class _SplashScreenState extends State<SplashScreen> {
     final ok = await _discoveryService.tryConnect(url);
     if (ok && mounted) {
       await _onServerSelected(url);
-    } else if (mounted) {
-      setState(() {
-        _searching = false;
-        _error = 'No se pudo conectar a $url';
-      });
+    } else {
+      AppLogger.instance.warn('[Splash] manual connect failed: $url');
+      if (mounted) {
+        setState(() {
+          _searching = false;
+          _error = 'No se pudo conectar a $url';
+        });
+      }
     }
   }
 

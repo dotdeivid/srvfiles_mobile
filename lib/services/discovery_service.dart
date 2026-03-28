@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'app_logger.dart';
 
 const _backendPort = 3001;
 
@@ -61,8 +62,8 @@ class DiscoveryService {
           json['status'] == 'ok';
       debugPrint('[Discovery] SrvFiles check → $ok');
       return ok;
-    } catch (e) {
-      debugPrint('[Discovery] error → $e');
+    } catch (e, st) {
+      AppLogger.instance.error('discovery_service.dart: error en tryConnect', error: e, stack: st);
       return false;
     }
   }

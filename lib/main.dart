@@ -4,9 +4,11 @@ import 'theme/app_theme.dart';
 import 'theme/app_colors.dart';
 import 'screens/splash_screen.dart';
 import 'services/notification_service.dart';
+import 'services/app_logger.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await AppLogger.instance.init();
   await NotificationService().init();
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(

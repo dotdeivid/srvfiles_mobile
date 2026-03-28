@@ -40,6 +40,7 @@ import '../services/received_files_service.dart';
 import '../services/embedded_relay.dart';
 import '../services/discovery_service.dart';
 import '../services/direct_transfer_pool.dart';
+import '../services/app_logger.dart';
 
 
 class HomeScreen extends StatefulWidget {
@@ -165,8 +166,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   // ─── Relay embebido ────────────────────────────────────────────────
 
   Future<void> _startRelay() async {
+    AppLogger.instance.info('[HomeScreen] starting embedded relay');
     try {
       await _relay.start();
+      AppLogger.instance.info('[HomeScreen] relay started: ${_relay.url}');
       // Conectar el TransferService al relay propio
       _apiConfig = ApiConfig(_relay.url!);
       _initTransfer();
@@ -177,6 +180,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _startDirectScanning();
       }
     } catch (e) {
+      AppLogger.instance.error('[HomeScreen] relay start failed', error: e);
       if (mounted) {
         setState(() => _error = 'No se pudo iniciar el relay: $e');
       }
@@ -203,6 +207,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       if (!mounted) return;
     }
 
+    AppLogger.instance.info('[HomeScreen] activating server mode');
     try {
       _stopDirectScanning();
       final pin = await _relay.startServerMode();
@@ -218,11 +223,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
         final token = data['token'] as String;
         _transferService.setToken(token);
+        AppLogger.instance.info('[HomeScreen] server mode auth OK');
 
         // Configurar FilesService para gestionar archivos del servidor local
         final localConfig = ApiConfig('http://127.0.0.1:${_relay.port}');
         _filesService = FilesService(localConfig);
         _filesService!.setToken(token);
+      } else {
+        AppLogger.instance.warn('[HomeScreen] server mode auth failed: status ${response.statusCode}');
       }
 
       // Reconectar WS con el nuevo token
@@ -233,7 +241,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         await _initialLoad();
       }
     } catch (e) {
-      debugPrint('[HomeScreen] _activateServerMode error: $e');
+      AppLogger.instance.error('[HomeScreen] _activateServerMode error', error: e);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -364,6 +372,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   // ─── Auto-auth para relay propio ────────────────────────────────────
 
   Future<void> _autoAuthWithRelay() async {
+    AppLogger.instance.debug('[HomeScreen] _autoAuthWithRelay');
     try {
       final response = await http.post(
         Uri.parse('http://127.0.0.1:${_relay.port}/api/auth'),
@@ -375,10 +384,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         final token = data['token'] as String;
         _transferService.setToken(token);
         _filesService?.setToken(token);
+        AppLogger.instance.info('[HomeScreen] auto-auth with relay OK');
         _connectWebSocket();
+      } else {
+        AppLogger.instance.warn('[HomeScreen] _autoAuthWithRelay failed: status ${response.statusCode}');
       }
     } catch (e) {
-      debugPrint('[HomeScreen] _autoAuthWithRelay error: $e');
+      AppLogger.instance.error('[HomeScreen] _autoAuthWithRelay error', error: e);
     }
   }
 
@@ -438,6 +450,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     });
 
     try {
+      AppLogger.instance.debug('[HomeScreen] _initialLoad starting');
       final results = await Future.wait([
         _filesService!.getFiles(),
         _filesService!.getStats(),
@@ -445,15 +458,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ]);
 
       if (mounted) {
+        final files = results[0] as List<FileInfo>;
+        AppLogger.instance.info('[HomeScreen] initial load complete: ${files.length} files');
         setState(() {
-          _files = results[0] as List<FileInfo>;
+          _files = files;
           _stats = results[1] as DiskStats;
           _config = results[2] as AppConfig;
           _loading = false;
         });
       }
     } catch (e) {
-      debugPrint('[HomeScreen] _initialLoad error → $e');
+      AppLogger.instance.error('[HomeScreen] _initialLoad failed', error: e);
       if (mounted) {
         setState(() {
           _error = 'Error al conectar con el servidor';
@@ -482,6 +497,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         });
       }
     } catch (e) {
+      AppLogger.instance.warn('[HomeScreen] _refreshData failed: $e');
       if (mounted && _files.isNotEmpty) {
         // Si ya tenemos datos, mostrar banner en vez de error completo
         setState(() => _connectionLost = true);
@@ -505,7 +521,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     };
 
     _transferService.onSendRequest = (request) {
-      debugPrint('[HomeScreen] onSendRequest: ${request.fileName} de ${request.fromName} mounted=$mounted');
+      AppLogger.instance.info('[HomeScreen] incoming transfer request: ${request.fileName} from ${request.fromName}');
       // Notificación en la barra (útil si la app está en background)
       _notificationService.showIncomingTransfer(
         request.fromName,
@@ -557,6 +573,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     };
 
     _transferService.onDisconnected = () {
+      AppLogger.instance.warn('[HomeScreen] WS disconnected, will reconnect in 3s');
       if (mounted) {
         setState(() {
           _myClientId = null;

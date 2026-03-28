@@ -5,6 +5,7 @@ import '../config/api_config.dart';
 import '../models/file_info.dart';
 import '../models/disk_stats.dart';
 import '../models/app_config.dart';
+import 'app_logger.dart';
 
 class FilesService {
   final ApiConfig _config;
@@ -23,12 +24,15 @@ class FilesService {
 
   /// Obtiene la lista de archivos del servidor.
   Future<List<FileInfo>> getFiles() async {
+    AppLogger.instance.debug('[FilesService] getFiles');
     final response = await http.get(Uri.parse(_config.filesUrl), headers: _authHeaders);
     if (response.statusCode != 200) {
+      AppLogger.instance.error('[FilesService] getFiles failed', error: 'status ${response.statusCode}');
       throw Exception('Error al obtener archivos: ${response.statusCode}');
     }
     final data = jsonDecode(response.body) as Map<String, dynamic>;
     final files = data['files'] as List<dynamic>;
+    AppLogger.instance.debug('[FilesService] getFiles — ${files.length} files');
     return files
         .map((e) => FileInfo.fromJson(e as Map<String, dynamic>))
         .toList();
@@ -53,12 +57,15 @@ class FilesService {
       ),
     );
 
+    AppLogger.instance.info('[FilesService] uploading file: ${file.path.split('/').last}');
     final streamedResponse = await request.send();
 
     if (streamedResponse.statusCode != 200) {
+      AppLogger.instance.error('[FilesService] uploadFile failed', error: 'status ${streamedResponse.statusCode}');
       throw Exception('Error al subir archivo: ${streamedResponse.statusCode}');
     }
 
+    AppLogger.instance.info('[FilesService] uploadFile complete');
     // Consumir el response body
     await streamedResponse.stream.drain();
   }
@@ -85,21 +92,28 @@ class FilesService {
       );
     }
 
+    AppLogger.instance.info('[FilesService] uploading ${files.length} files');
     final streamedResponse = await request.send();
 
     if (streamedResponse.statusCode != 200) {
+      AppLogger.instance.error('[FilesService] uploadFiles failed', error: 'status ${streamedResponse.statusCode}');
       throw Exception('Error al subir archivos: ${streamedResponse.statusCode}');
     }
 
+    AppLogger.instance.info('[FilesService] uploadFiles complete');
     await streamedResponse.stream.drain();
   }
 
   /// Elimina un archivo del servidor.
   Future<bool> deleteFile(String filename) async {
+    AppLogger.instance.info('[FilesService] deleteFile: $filename');
     final response = await http.delete(
       Uri.parse('${_config.filesUrl}/${Uri.encodeComponent(filename)}'),
       headers: _authHeaders,
     );
+    if (response.statusCode != 200) {
+      AppLogger.instance.warn('[FilesService] deleteFile failed: status ${response.statusCode}');
+    }
     return response.statusCode == 200;
   }
 
@@ -107,6 +121,7 @@ class FilesService {
   Future<DiskStats> getStats() async {
     final response = await http.get(Uri.parse(_config.statsUrl), headers: _authHeaders);
     if (response.statusCode != 200) {
+      AppLogger.instance.error('[FilesService] getStats failed', error: 'status ${response.statusCode}');
       throw Exception('Error al obtener stats: ${response.statusCode}');
     }
     return DiskStats.fromJson(jsonDecode(response.body) as Map<String, dynamic>);
@@ -116,6 +131,7 @@ class FilesService {
   Future<AppConfig> getConfig() async {
     final response = await http.get(Uri.parse(_config.configUrl), headers: _authHeaders);
     if (response.statusCode != 200) {
+      AppLogger.instance.error('[FilesService] getConfig failed', error: 'status ${response.statusCode}');
       throw Exception('Error al obtener config: ${response.statusCode}');
     }
     return AppConfig.fromJson(jsonDecode(response.body) as Map<String, dynamic>);
@@ -130,8 +146,11 @@ class FilesService {
       final response = await http
           .get(Uri.parse(_config.healthUrl))
           .timeout(const Duration(seconds: 3));
-      return response.statusCode == 200;
-    } catch (_) {
+      final ok = response.statusCode == 200;
+      if (!ok) AppLogger.instance.warn('[FilesService] healthCheck failed: status ${response.statusCode}');
+      return ok;
+    } catch (e) {
+      AppLogger.instance.warn('[FilesService] healthCheck error: $e');
       return false;
     }
   }

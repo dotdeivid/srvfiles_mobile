@@ -6,6 +6,8 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import '../config/api_config.dart';
 import '../models/transfer_client.dart';
 import '../models/transfer_request.dart';
+import 'app_logger.dart';
+import 'crypto_service.dart';
 
 /// Tamaño de chunk: 256 KB — mismo que el frontend web.
 const int chunkSize = 256 * 1024;
@@ -51,19 +53,28 @@ class TransferService {
   /// Devuelve true si hay un token de sesión activo.
   bool get hasToken => _sessionToken != null;
 
+  // ─── Cifrado (ECDH P-256 + AES-256-GCM) ──────────────────────────
+  SessionCipher? _cipher;
+  Completer<String>? _keyExchangeCompleter;
+  /// Cola de envíos cifrados para preservar el orden de mensajes.
+  Future<void> _sendQueue = Future.value();
+
   /// Conecta al WebSocket del servidor.
-  /// Si hay un token disponible, lo envía como primer mensaje (auth handshake).
-  /// Cierra cualquier conexión previa antes de abrir la nueva.
   void connect(ApiConfig config) {
     _subscription?.cancel();
     _channel?.sink.close();
+    _cipher = null;
+    _keyExchangeCompleter = null;
+    _sendQueue = Future.value();
 
     _disposed = false;
     final wsUrl = config.wsUrl;
     _channel = WebSocketChannel.connect(Uri.parse(wsUrl));
 
     _subscription = _channel!.stream.listen(
-      _onMessage,
+      (data) {
+        unawaited(_onMessage(data));
+      },
       onDone: () {
         if (_disposed) return;
         final closeCode = _channel?.closeCode;
@@ -80,76 +91,165 @@ class TransferService {
 
     // Si tenemos token, autenticarse antes de registrar el cliente
     if (_sessionToken != null) {
-      _sendJson({'type': 'auth', 'token': _sessionToken});
+      _channel?.sink.add(jsonEncode({'type': 'auth', 'token': _sessionToken}));
     }
   }
 
-  void _onMessage(dynamic message) {
+  Future<void> _onMessage(dynamic message) async {
     if (message is Uint8List) {
-      _handleBinary(message);
+      await _handleBinary(message);
       return;
     }
     if (message is List<int>) {
-      _handleBinary(Uint8List.fromList(message));
+      await _handleBinary(Uint8List.fromList(message));
       return;
     }
     if (message is String) {
-      _handleJson(message);
+      await _handleJson(message);
     }
   }
 
-  void _handleBinary(Uint8List data) {
+  Future<void> _handleBinary(Uint8List data) async {
+    if (_cipher != null) {
+      try {
+        data = await _cipher!.decryptBinary(data);
+      } catch (e, st) {
+        AppLogger.instance.error('transfer_service.dart: binary decryption failed', error: e, stack: st);
+        return;
+      }
+    }
     if (data.length <= transferIdLength) return;
     final transferId = utf8.decode(data.sublist(0, transferIdLength)).trim();
     final chunkData = data.sublist(transferIdLength);
     onBinaryChunk?.call(transferId, chunkData);
   }
 
-  void _handleJson(String text) {
+  Future<void> _handleJson(String text) async {
     try {
-      final msg = jsonDecode(text) as Map<String, dynamic>;
+      Map<String, dynamic> msg;
+
+      // Decrypt if in encrypted mode
+      if (_cipher != null) {
+        final raw = jsonDecode(text) as Map<String, dynamic>;
+        if (raw['type'] == 'encrypted') {
+          final decrypted = await _cipher!.decryptJson(
+            raw['iv'] as String,
+            raw['data'] as String,
+          );
+          msg = jsonDecode(decrypted) as Map<String, dynamic>;
+        } else {
+          msg = raw;
+        }
+      } else {
+        msg = jsonDecode(text) as Map<String, dynamic>;
+      }
+
       final type = msg['type'] as String?;
       debugPrint('[TransferService] ← $type');
+
       switch (type) {
         case 'auth_ok':
-          // Servidor confirmó el token — ahora registramos el cliente
+          // Intercept: do key exchange before notifying the caller
+          await _doKeyExchange();
           onAuthOk?.call();
+
+        case 'key-exchange':
+          final pubKey = msg['publicKey'] as String?;
+          if (pubKey != null) {
+            _keyExchangeCompleter?.complete(pubKey);
+            _keyExchangeCompleter = null;
+          }
+
         case 'welcome':
           _clientId = msg['clientId'] as String;
           debugPrint('[TransferService] clientId asignado: $_clientId');
           onWelcome?.call(_clientId!);
+
         case 'clients':
           final list = (msg['clients'] as List<dynamic>)
               .map((e) => TransferClient.fromJson(e as Map<String, dynamic>))
               .toList();
           debugPrint('[TransferService] clients update: ${list.map((c) => '${c.appName}(${c.clientId})').join(', ')}');
           onClientsUpdate?.call(list);
+
         case 'send-request':
           debugPrint('[TransferService] send-request recibido: ${msg['fileName']} de ${msg['fromName']}');
           onSendRequest?.call(IncomingTransferRequest.fromJson(msg));
+
         case 'send-accept':
           onSendAccept?.call(msg['transferId'] as String);
+
         case 'send-reject':
           onSendReject?.call(
             msg['transferId'] as String,
             msg['reason'] as String?,
           );
+
         case 'send-cancel':
           onSendCancel?.call(msg['transferId'] as String);
+
         case 'send-complete':
           onSendComplete?.call(msg['transferId'] as String);
+
         case 'files-changed':
           onFilesChanged?.call();
       }
     } catch (e, st) {
-      debugPrint('[TransferService] ERROR procesando mensaje: $e\n$st\nMensaje: $text');
+      AppLogger.instance.error('transfer_service.dart: error procesando mensaje WS', error: e, stack: st);
     }
   }
 
-  // ─── Métodos de envío (JSON) ─────────────────────────────────────
+  // ─── Key exchange ─────────────────────────────────────────────────
 
+  Future<void> _doKeyExchange() async {
+    try {
+      _cipher = await CryptoService.clientKeyExchange(
+        sendPublicKey: (pubKeyB64) {
+          _channel?.sink.add(jsonEncode({'type': 'key-exchange', 'publicKey': pubKeyB64}));
+          AppLogger.instance.debug('transfer_service.dart: key-exchange enviado, esperando respuesta');
+        },
+        waitForPeerKey: () async {
+          _keyExchangeCompleter = Completer<String>();
+          return _keyExchangeCompleter!.future.timeout(
+            const Duration(seconds: 5),
+            onTimeout: () {
+              AppLogger.instance.warn('transfer_service.dart: key exchange timeout — sin cifrado');
+              _keyExchangeCompleter = null;
+              return '';
+            },
+          );
+        },
+      );
+      if (_cipher != null) {
+        AppLogger.instance.info('transfer_service.dart: key exchange completo — cifrado activo');
+      }
+    } catch (e, st) {
+      AppLogger.instance.error('transfer_service.dart: key exchange fallido', error: e, stack: st);
+    }
+  }
+
+  // ─── Métodos de envío ─────────────────────────────────────────────
+
+  /// Envía JSON, cifrando si el cifrado está activo. Preserva el orden mediante cola.
   void _sendJson(Map<String, dynamic> msg) {
-    _channel?.sink.add(jsonEncode(msg));
+    if (_cipher == null) {
+      _channel?.sink.add(jsonEncode(msg));
+      return;
+    }
+    final cipher = _cipher!;
+    final payload = jsonEncode(msg);
+    _sendQueue = _sendQueue.then((_) async {
+      try {
+        final encrypted = await cipher.encryptJson(payload);
+        _channel?.sink.add(jsonEncode({
+          'type': 'encrypted',
+          'iv': encrypted['iv'],
+          'data': encrypted['data'],
+        }));
+      } catch (e) {
+        AppLogger.instance.error('transfer_service.dart: fallo al cifrar mensaje JSON', error: e);
+      }
+    });
   }
 
   /// Registra este cliente en el servidor con un nombre.
@@ -202,9 +302,7 @@ class TransferService {
 
   // ─── Envío de archivo en chunks ──────────────────────────────────
 
-  /// Envía un archivo como chunks binarios de 256 KB.
-  /// Cada frame: 36 bytes (transferId) + datos del chunk.
-  /// Envía `send-complete` al terminar.
+  /// Envía un archivo como chunks binarios de 256 KB, cifrados si hay sesión activa.
   Future<void> sendFile({
     required String transferId,
     required Uint8List fileBytes,
@@ -226,7 +324,12 @@ class TransferService {
       frame.setRange(0, transferIdLength, idBytes);
       frame.setRange(transferIdLength, frame.length, chunk);
 
-      _channel?.sink.add(frame);
+      if (_cipher != null) {
+        final encrypted = await _cipher!.encryptBinary(frame);
+        _channel?.sink.add(encrypted);
+      } else {
+        _channel?.sink.add(frame);
+      }
 
       offset = end;
       onProgress?.call(offset / total);
@@ -245,5 +348,7 @@ class TransferService {
     _channel?.sink.close();
     _channel = null;
     _clientId = null;
+    _cipher = null;
+    _keyExchangeCompleter = null;
   }
 }

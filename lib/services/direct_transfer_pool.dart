@@ -4,6 +4,7 @@ import '../config/api_config.dart';
 import '../models/transfer_client.dart';
 import '../models/transfer_request.dart';
 import 'transfer_service.dart';
+import 'app_logger.dart';
 
 /// Conexión activa a un relay remoto con el clientId del dueño del relay resuelto.
 class DirectPeerConnection {
@@ -52,6 +53,7 @@ class DirectTransferPool {
     existing?.dispose();
     _pool.remove(targetUrl);
 
+    AppLogger.instance.info('[DirectTransferPool] opening new connection to $targetUrl');
     final service = TransferService();
     final completer = Completer<String?>();
     String? myClientId;
@@ -86,14 +88,17 @@ class DirectTransferPool {
     String? targetClientId;
     try {
       targetClientId = await completer.future.timeout(const Duration(seconds: 5));
-    } catch (_) {
-      // timeout o error al conectar
+    } catch (e) {
+      AppLogger.instance.error('[DirectTransferPool] connection timeout or error', error: e);
     }
 
     if (targetClientId == null) {
+      AppLogger.instance.warn('[DirectTransferPool] could not resolve relay owner for $targetUrl');
       service.dispose();
       return null;
     }
+
+    AppLogger.instance.info('[DirectTransferPool] connection established', );
 
     final entry = _PoolEntry(
       service: service,
@@ -109,6 +114,7 @@ class DirectTransferPool {
   void touch(String targetUrl) => _pool[targetUrl]?.resetTimer();
 
   void _close(String targetUrl) {
+    AppLogger.instance.info('[DirectTransferPool] closing connection to $targetUrl');
     _pool.remove(targetUrl)?.dispose();
   }
 

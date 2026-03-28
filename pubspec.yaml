@@ -31,6 +31,9 @@ dependencies:
   flutter:
     sdk: flutter
 
+  # Logging
+  logger: ^2.4.0
+
   # HTTP para la API REST
   http: ^1.2.1
 
@@ -67,6 +70,9 @@ dependencies:
 
   # Hash SHA-256 para el PIN del servidor
   crypto: ^3.0.3
+
+  # Cifrado E2E: ECDH P-256 + HKDF + AES-256-GCM
+  cryptography: ^2.7.0
 
   # Parsing de multipart/form-data en el servidor embebido
   mime: ^1.0.6

@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'app_logger.dart';
 
 /// Servicio de notificaciones locales para descargas y transferencias completadas.
 class NotificationService {
@@ -30,8 +31,14 @@ class NotificationService {
       iOS: iosSettings,
     );
 
-    await _plugin.initialize(settings);
-    _initialized = true;
+    try {
+      await _plugin.initialize(settings);
+      _initialized = true;
+      AppLogger.instance.info('[NotificationService] initialized');
+    } catch (e) {
+      AppLogger.instance.error('[NotificationService] init failed', error: e);
+      return;
+    }
 
     // Android 13+ requiere solicitar el permiso en runtime
     if (Platform.isAndroid) {
@@ -140,6 +147,11 @@ class NotificationService {
       iOS: iosDetails,
     );
 
-    await _plugin.show(id, title, body, details);
+    try {
+      await _plugin.show(id, title, body, details);
+      AppLogger.instance.debug('[NotificationService] notification shown: $title');
+    } catch (e) {
+      AppLogger.instance.error('[NotificationService] show failed', error: e);
+    }
   }
 }
