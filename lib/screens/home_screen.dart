@@ -19,6 +19,7 @@ import '../models/transfer_client.dart';
 import '../models/transfer_request.dart';
 import '../models/active_transfer.dart';
 import '../services/files_service.dart';
+import '../services/preview_service.dart';
 import '../services/transfer_service.dart';
 import '../services/device_name_service.dart';
 import '../widgets/gradient_text.dart';
@@ -465,6 +466,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           _stats = results[1] as DiskStats;
           _config = results[2] as AppConfig;
           _loading = false;
+          PreviewService.setMaxPreviewMb(_config!.previewMaxFileSizeMb);
         });
       }
     } catch (e) {
@@ -1658,6 +1660,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               return FileListItem(
                 file: file,
                 onDownload: () => OpenFilex.open(file.downloadUrl),
+                onPreview: () => unawaited(PreviewService.previewLocalFile(
+                  filePath: file.downloadUrl,
+                  fileName: file.name,
+                  context: context,
+                )),
                 onShare: () async {
                   await Share.shareXFiles([XFile(file.downloadUrl)]);
                 },
@@ -1743,6 +1750,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           return FileListItem(
             file: file,
             onDownload: () => _onDownload(file),
+            onPreview: () => unawaited(PreviewService.previewServerFile(
+              file: file,
+              config: _apiConfig!,
+              sessionToken: _filesService?.sessionToken,
+              context: context,
+            )),
             onDelete: () => _deleteServerFile(file),
           );
         },
@@ -1774,6 +1787,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   file: file,
                   onDownload: () => _onDownload(file),
                   onShare: () => _onShare(file),
+                  onPreview: () => unawaited(PreviewService.previewServerFile(
+                    file: file,
+                    config: _apiConfig!,
+                    sessionToken: _filesService?.sessionToken,
+                    context: context,
+                  )),
                   onDelete: () => _deleteServerFile(file),
                 );
               },

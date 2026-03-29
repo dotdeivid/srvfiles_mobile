@@ -16,6 +16,9 @@ class FilesService {
   /// Guarda el token de sesión para incluirlo en todas las requests.
   void setToken(String token) => _sessionToken = token;
 
+  /// Expone el token actual (usado por PreviewService).
+  String? get sessionToken => _sessionToken;
+
   Map<String, String> get _authHeaders =>
       _sessionToken != null ? {'X-SrvFiles-Token': _sessionToken!} : {};
 

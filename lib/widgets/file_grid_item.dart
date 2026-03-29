@@ -5,6 +5,7 @@ import '../widgets/glass_card.dart';
 import '../models/file_info.dart';
 import '../utils/file_icons.dart';
 import '../utils/format.dart';
+import '../utils/file_type_helper.dart';
 
 /// Tarjeta de archivo en modo grid. Replica el file-card del FileItem.tsx web.
 /// Incluye long-press para menú contextual.
@@ -14,6 +15,7 @@ class FileGridItem extends StatelessWidget {
     required this.file,
     required this.onDownload,
     required this.onShare,
+    this.onPreview,
     this.onCopyLink,
     this.onDelete,
   });
@@ -21,6 +23,8 @@ class FileGridItem extends StatelessWidget {
   final FileInfo file;
   final VoidCallback onDownload;
   final VoidCallback onShare;
+  /// Called when the user taps the eye icon. Null hides the button.
+  final VoidCallback? onPreview;
   final VoidCallback? onCopyLink;
   final VoidCallback? onDelete;
 
@@ -184,6 +188,23 @@ class FileGridItem extends StatelessWidget {
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
+                  if (onPreview != null && FileTypeHelper.canPreview(file.name))
+                    Semantics(
+                      button: true,
+                      label: 'Vista previa ${file.name}',
+                      child: IconButton(
+                        icon: const Icon(Icons.visibility_rounded, size: 18),
+                        color: AppColors.textAccent,
+                        onPressed: () {
+                          HapticFeedback.lightImpact();
+                          onPreview!();
+                        },
+                        tooltip: 'Vista previa',
+                        visualDensity: VisualDensity.compact,
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                      ),
+                    ),
                   Semantics(
                     button: true,
                     label: 'Descargar ${file.name}',

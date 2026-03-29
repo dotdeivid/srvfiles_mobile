@@ -4,6 +4,7 @@ import '../theme/app_colors.dart';
 import '../models/file_info.dart';
 import '../utils/file_icons.dart';
 import '../utils/format.dart';
+import '../utils/file_type_helper.dart';
 
 /// Fila de archivo en modo lista. Replica el file-row del FileItem.tsx web.
 /// Incluye long-press para menú contextual y animación de entrada.
@@ -12,6 +13,7 @@ class FileListItem extends StatelessWidget {
     super.key,
     required this.file,
     required this.onDownload,
+    this.onPreview,
     this.onShare,
     this.onCopyLink,
     this.onDelete,
@@ -21,6 +23,8 @@ class FileListItem extends StatelessWidget {
 
   final FileInfo file;
   final VoidCallback onDownload;
+  /// Called when the user taps the eye icon. Null hides the button.
+  final VoidCallback? onPreview;
   final VoidCallback? onShare;
   final VoidCallback? onCopyLink;
   final VoidCallback? onDelete;
@@ -179,6 +183,21 @@ class FileListItem extends StatelessWidget {
               ),
 
               // Acciones
+              if (onPreview != null && FileTypeHelper.canPreview(file.name))
+                Semantics(
+                  button: true,
+                  label: 'Vista previa ${file.name}',
+                  child: IconButton(
+                    icon: const Icon(Icons.visibility_rounded, size: 20),
+                    color: AppColors.textAccent,
+                    onPressed: () {
+                      HapticFeedback.lightImpact();
+                      onPreview!();
+                    },
+                    tooltip: 'Vista previa',
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ),
               Semantics(
                 button: true,
                 label: '$downloadTooltip ${file.name}',

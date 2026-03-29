@@ -12,7 +12,9 @@ App Android para el ecosistema [SrvFiles](https://github.com/dotdeivid/srvfiles)
 ## Características principales
 
 - Explorar, subir, descargar y eliminar archivos del servidor
+- **Previsualización de archivos** — botón "ver" en lista y grilla; imágenes, video, audio, PDF y texto se abren en pantalla completa sin descargar permanentemente (ver tabla abajo)
 - Transferencia P2P directa entre dispositivos (sin pasar por disco)
+- **Cifrado E2E en P2P** — ECDH P-256 + AES-256-GCM; cada sesión usa clave efímera
 - Archivos recibidos guardados en `Download/SrvFiles/received/`
 - Descubrimiento automático de servidores en la red local al abrir la app
 - Autenticación PIN al conectarse a servidores protegidos
@@ -21,6 +23,23 @@ App Android para el ecosistema [SrvFiles](https://github.com/dotdeivid/srvfiles)
 - QR de acceso al servidor
 - Servicio en primer plano: el WebSocket sigue activo con la pantalla bloqueada (solo cuando la app está en segundo plano)
 - Notificaciones locales al completar descargas o transferencias P2P (Android 13+ pide permiso al primer arranque)
+- **Logging estructurado** — AppLogger con niveles debug/info/warn/error; visible en consola en debug y en archivo en release
+
+---
+
+## Archivos que se pueden previsualizar
+
+| Categoría | Extensiones | Mobile |
+|-----------|------------|--------|
+| **Imagen** | jpg, jpeg, png, gif, webp, bmp, ico | `photo_view` (zoom con gestos) |
+| **SVG** | svg | `flutter_svg` |
+| **Video** | mp4, mov, m4v, webm | `video_player` + `chewie` |
+| **Audio** | mp3, wav, aac, m4a, ogg, flac, opus | `audioplayers` + UI con play/pausa y barra |
+| **PDF** | pdf | `pdfx` (scroll de páginas) |
+| **Texto / Código** | txt, md, json, xml, csv, yaml, yml, html, js, ts, dart, py, go, rs, c, cpp, h, css, sh, bash | Widget monospace scrollable |
+| **Desconocido** | docx, xlsx, zip, apk, etc. | Botón "Abrir con" → `open_filex` |
+
+Los archivos del servidor se descargan a un directorio temporal y se eliminan al cerrar el previsualizador. Los archivos ya recibidos (en `Download/SrvFiles/received/`) se abren directamente desde disco.
 
 ---
 

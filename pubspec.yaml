@@ -74,6 +74,14 @@ dependencies:
   # Cifrado E2E: ECDH P-256 + HKDF + AES-256-GCM
   cryptography: ^2.7.0
 
+  # Previsualizador de archivos
+  photo_view: ^0.14.0
+  video_player: ^2.8.0
+  chewie: ^1.8.0
+  audioplayers: ^6.1.0
+  pdfx: ^2.6.0
+  flutter_svg: ^2.0.10
+
   # Parsing de multipart/form-data en el servidor embebido
   mime: ^1.0.6
 
