@@ -1,74 +1,27 @@
 # services/device_name_service.dart
 
-**Archivo:** `lib/services/device_name_service.dart`
-**Rol:** Gestiona el nombre del dispositivo con persistencia en `SharedPreferences`. Genera un nombre aleatorio en el primer lanzamiento.
+**File:** `lib/services/device_name_service.dart`
 
----
+## Purpose
 
-## Persistencia con `SharedPreferences`
+Manages the device display name used for P2P identification, with persistence in `SharedPreferences`. Generates a random adjective + animal name on first launch. Mirrors the pattern of `useDeviceName.ts` in the frontend.
 
-`SharedPreferences` es un almacenamiento clave-valor persistente que sobrevive al cierre de la app. Es el equivalente de `localStorage` en el navegador. Internamente usa `NSUserDefaults` en iOS y `SharedPreferences` de Android.
+## Exports / Public API
 
----
+### `DeviceNameService`
 
-## Función `_randomName`
+| Method | Return | Description |
+|---|---|---|
+| `Future<String> getName()` | `String` | Returns the stored name, or a random name if none is saved. On error, logs via `AppLogger` and returns a random name. |
+| `Future<String> saveName(String name)` | `String` | Trims the input; if empty, generates a random name instead. Persists under key `'srvfiles-device-name'`. Returns the final saved name. |
+| `Future<bool> isFirstLaunch()` | `bool` | `true` if the storage key `'srvfiles-device-name'` does not exist in `SharedPreferences` (uses `containsKey`). |
+| `String generateRandomName()` | `String` | Generates a random name without saving (public wrapper around the private `_randomName`). |
 
-```dart
-String _randomName() {
-  const adjectives = ['Veloz', 'Azul', 'Solar', ...];
-  const nouns = ['Halcón', 'Puma', 'Río', ...];
-  final rand = Random();
-  return '${adjectives[rand.nextInt(adjectives.length)]} ${nouns[rand.nextInt(nouns.length)]}';
-}
-```
+## Key behaviors
 
-Genera nombres del estilo "Veloz Halcón" combinando un adjetivo y un sustantivo al azar. El mismo patrón que el frontend web (`randomName()` en `useDeviceName.ts`).
-
----
-
-## Función `getName`
-
-```dart
-Future<String> getName() async {
-  final prefs = await SharedPreferences.getInstance();
-  return prefs.getString('device_name') ?? _randomName();
-}
-```
-
-Lee el nombre guardado. Si no hay ninguno (primera vez), genera uno aleatorio. No lo guarda todavía — eso lo hace `saveName`.
-
----
-
-## Función `saveName`
-
-```dart
-Future<void> saveName(String name) async {
-  final prefs = await SharedPreferences.getInstance();
-  await prefs.setString('device_name', name);
-}
-```
-
-Persiste el nombre elegido por el usuario.
-
----
-
-## Función `isFirstLaunch`
-
-```dart
-Future<bool> isFirstLaunch() async {
-  final prefs = await SharedPreferences.getInstance();
-  return prefs.getString('device_name') == null;
-}
-```
-
-Retorna `true` si nunca se guardó un nombre. Usado en `SplashScreen` para decidir si mostrar el diálogo `NameDialog` antes de continuar.
-
----
-
-## Función `generateRandomName`
-
-```dart
-String generateRandomName() => _randomName();
-```
-
-Wrapper público de `_randomName()` para que otros módulos puedan generar un nombre aleatorio sin guardar nada. Usado cuando se necesita mostrar un nombre de placeholder en la UI.
+- **Storage key**: `'srvfiles-device-name'` (in `SharedPreferences`).
+- **Name format**: `"<adjective> <animal>"` — same vocabulary as the web frontend (`useDeviceName.ts`). Adjectives: Rápido, Azul, Verde, Veloz, Brillante, Tranquilo, Creativo, Curioso. Animals: Zorro, Puma, Delfín, Águila, Jaguar, Lobo, Oso, Cóndor.
+- **`saveName` empty guard**: if the trimmed input is empty, a random name is generated and saved instead of storing an empty string.
+- **`isFirstLaunch`** uses `prefs.containsKey(_storageKey)` — more reliable than a null check since `SharedPreferences` distinguishes missing keys from null values.
+- All methods log activity at the appropriate level via `AppLogger.instance`.
+- Dependencies: `shared_preferences`, `dart:math`, `AppLogger`.

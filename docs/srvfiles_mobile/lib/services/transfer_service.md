@@ -1,153 +1,86 @@
 # services/transfer_service.dart
 
-**Archivo:** `lib/services/transfer_service.dart`
-**Rol:** Cliente WebSocket para el protocolo de transferencia P2P. Gestiona la conexión al relay, envía mensajes de señalización, y retransmite chunks binarios.
+**File:** `lib/services/transfer_service.dart`
 
----
+## Purpose
 
-## Clase `TransferService`
+WebSocket client for the SrvFiles P2P transfer protocol. Manages the connection to a relay server, handles JSON signaling messages, performs ECDH key exchange for end-to-end encryption, and streams binary file chunks. Mirrors `transfer.api.ts` from the frontend web.
 
-```dart
-class TransferService {
-  WebSocketChannel? _channel;
-  String? clientId;
+## Exports / Public API
 
-  // Callbacks
-  Function(List<TransferClient>)? onClientsUpdate;
-  Function(IncomingTransferRequest)? onSendRequest;
-  Function(String transferId)? onSendAccept;
-  Function(String transferId)? onSendReject;
-  Function(String transferId)? onSendCancel;
-  Function(String transferId)? onSendComplete;
-  Function(String transferId, Uint8List data)? onBinaryChunk;
-}
+### Constants
+
+| Constant | Value | Description |
+|---|---|---|
+| `chunkSize` | `256 * 1024` (256 KB) | Binary chunk size — matches the web frontend. |
+| `transferIdLength` | `36` | Length of the UUID header prepended to binary frames. |
+
+### `TransferService`
+
+**Callbacks (all nullable, set by `TransferController`):**
+
+| Callback | Signature | Description |
+|---|---|---|
+| `onAuthOk` | `void Function()` | Fired after `auth_ok` + key exchange. |
+| `onWelcome` | `void Function(String clientId)` | Fired on `welcome` with this client's assigned ID. |
+| `onClientsUpdate` | `void Function(List<TransferClient>)` | Fired on `clients` broadcast. |
+| `onSendRequest` | `void Function(IncomingTransferRequest)` | Incoming transfer request from a peer. |
+| `onSendAccept` | `void Function(String transferId)` | Peer accepted our transfer request. |
+| `onSendReject` | `void Function(String transferId, String? reason)` | Peer rejected. |
+| `onSendCancel` | `void Function(String transferId)` | Transfer was cancelled. |
+| `onSendComplete` | `void Function(String transferId)` | Sender signalled all chunks sent. |
+| `onBinaryChunk` | `void Function(String transferId, Uint8List data)` | A decrypted binary chunk arrived. |
+| `onDisconnected` | `void Function()` | WebSocket closed unexpectedly. |
+| `onFilesChanged` | `void Function()` | Relay broadcast `files-changed`. |
+| `onAuthRequired` | `void Function()` | WebSocket closed with code `4401` (token invalid). |
+
+**Getters:**
+
+| Getter | Description |
+|---|---|
+| `String? clientId` | This client's relay-assigned ID (available after `welcome`). |
+| `bool isConnected` | `true` if channel is open and not disposed. |
+| `bool hasToken` | `true` if a session token has been set via `setToken`. |
+
+**Methods:**
+
+| Method | Description |
+|---|---|
+| `void setToken(String token)` | Stores a session token for authenticated connections. |
+| `void clearToken()` | Removes the session token. |
+| `void connect(ApiConfig config)` | Connects to `config.wsUrl`. Cancels any existing connection first. If a token is set, sends `{'type': 'auth', 'token': ...}` immediately after opening. |
+| `void register(String appName)` | Sends `hello` with `deviceType: 'mobile'`. |
+| `void setReceiving(bool receiving)` | Sends `set-receiving`. |
+| `void sendRequest({to, fileName, fileSize, mimeType, transferId})` | Sends `send-request`. |
+| `void accept(String transferId)` | Sends `send-accept`. |
+| `void reject(String transferId)` | Sends `send-reject`. |
+| `void cancel(String transferId)` | Sends `send-cancel`. |
+| `void rename(String newName)` | Sends `rename`. |
+| `Future<void> sendFile({transferId, fileBytes, onProgress?})` | Sends the file as 256 KB binary chunks. Each frame is `[36-byte transferId][chunk data]`. Yields to the event loop after each chunk with `Future.delayed(Duration.zero)`. Sends `send-complete` after all chunks. |
+| `void dispose()` | Closes the WebSocket and cancels the subscription. |
+
+## Key behaviors — ECDH key exchange
+
+On receiving `auth_ok`, the service immediately performs a client-side key exchange:
+1. Calls `CryptoService.clientKeyExchange`, sending `{'type': 'key-exchange', 'publicKey': <base64>}`.
+2. Waits up to 5 seconds for the server's `key-exchange` reply via a `Completer`.
+3. On success, `_cipher` is set to the derived `SessionCipher`.
+4. After key exchange completes, `onAuthOk` is called.
+
+## Key behaviors — encrypted send queue
+
+JSON messages are sent through `_sendJson`, which maintains a `Future<void> _sendQueue` chain to preserve message ordering when async encryption is involved:
+- Without cipher: sends directly to the channel sink.
+- With cipher: encrypts asynchronously in the queue, wraps in `{'type': 'encrypted', 'iv': ..., 'data': ...}`.
+
+Binary chunks are encrypted with `cipher.encryptBinary` (inline await, no queue — binary order is maintained by the sequential `while` loop).
+
+## Key behaviors — binary frame format
+
+```
+[36 bytes: transferId padded with spaces][N bytes: chunk data]
 ```
 
-El servicio expone callbacks que `HomeScreen` asigna para recibir eventos. Es el mismo patrón que `TransferConnection` del frontend web.
+The receiver reads the first 36 bytes to route the chunk to the correct buffer, then passes the remainder to `onBinaryChunk`.
 
----
-
-## Método `connect`
-
-```dart
-Future<void> connect(String wsUrl, String appName, String deviceName) async {
-  _channel = WebSocketChannel.connect(Uri.parse(wsUrl));
-  _channel!.stream.listen(
-    _onMessage,
-    onDone: () { /* desconexión */ },
-    onError: (err) { /* error */ },
-  );
-  // Enviar hello
-  _send({ 'type': 'hello', 'appName': deviceName, 'deviceType': 'mobile' });
-}
-```
-
-Conecta al servidor WebSocket y registra los listeners. `_channel!.stream` es un `Stream<dynamic>` que emite un evento por cada mensaje recibido.
-
-### `WebSocketChannel` vs `WebSocket`
-
-`WebSocketChannel` es del paquete `web_socket_channel` y funciona en Flutter (tanto web como nativo). La clase `WebSocket` de `dart:io` solo funciona en código nativo. Para apps Flutter multiplataforma, `WebSocketChannel` es la opción correcta.
-
----
-
-## Método `_onMessage`
-
-```dart
-void _onMessage(dynamic message) {
-  if (message is List<int>) {
-    _handleBinary(Uint8List.fromList(message));
-  } else if (message is String) {
-    _handleJson(jsonDecode(message));
-  }
-}
-```
-
-Distingue entre mensajes binarios (chunks de archivo) y JSON (mensajes de señalización). Los WebSockets pueden enviar ambos tipos en la misma conexión.
-
----
-
-## Método `_handleBinary`
-
-```dart
-void _handleBinary(Uint8List data) {
-  // Los primeros 36 bytes son el transferId en ASCII
-  final transferId = String.fromCharCodes(data.sublist(0, 36)).trim();
-  onBinaryChunk?.call(transferId, data.sublist(36));
-}
-```
-
-Lee el `transferId` del encabezado del chunk (36 bytes en ASCII) y notifica al `HomeScreen` con los bytes del contenido. El frame binario tiene el formato: `[36 bytes transferId][bytes del archivo]`.
-
----
-
-## Método `_handleJson`
-
-Despacha el mensaje según su tipo. Ejemplo:
-
-```dart
-case 'welcome':
-  clientId = msg['clientId'];
-  break;
-case 'clients':
-  final list = (msg['clients'] as List)
-      .map((c) => TransferClient.fromJson(c))
-      .toList();
-  onClientsUpdate?.call(list);
-  break;
-case 'send-request':
-  onSendRequest?.call(IncomingTransferRequest.fromJson(msg));
-  break;
-// ... etc
-```
-
----
-
-## Método `sendFile`
-
-```dart
-Future<void> sendFile({
-  required String transferId,
-  required Uint8List fileBytes,
-  required Function(double) onProgress,
-}) async {
-  const chunkSize = 64 * 1024; // 64 KB
-  int offset = 0;
-  final idBytes = Uint8List.fromList(
-    transferId.padRight(36).codeUnits,
-  );
-
-  while (offset < fileBytes.length) {
-    final end = (offset + chunkSize).clamp(0, fileBytes.length);
-    final chunkData = fileBytes.sublist(offset, end);
-    final frame = Uint8List(idBytes.length + chunkData.length);
-    frame.setRange(0, idBytes.length, idBytes);
-    frame.setRange(idBytes.length, frame.length, chunkData);
-
-    _channel!.sink.add(frame);
-    offset = end;
-    onProgress(offset / fileBytes.length);
-
-    // Yield al event loop para no bloquear la UI
-    await Future.delayed(Duration.zero);
-  }
-
-  sendComplete(transferId);
-}
-```
-
-Fragmenta el archivo en chunks de 64 KB y los envía uno por uno. Cada chunk tiene el prefijo de 36 bytes del `transferId` para que el relay sepa a quién reenviarlo.
-
-`await Future.delayed(Duration.zero)` cede el control al event loop de Dart después de cada chunk. Sin esto, el loop sincrónico bloquearía la UI durante toda la transferencia.
-
----
-
-## Método `dispose`
-
-```dart
-void dispose() {
-  _channel?.sink.close();
-  _channel = null;
-}
-```
-
-Cierra la conexión WebSocket limpiamente. Se llama desde `HomeScreen.dispose()` cuando la pantalla se destruye.
+- Dependencies: `web_socket_channel`, `CryptoService`, `ApiConfig`, `TransferClient`, `IncomingTransferRequest`, `AppLogger`.

@@ -1,130 +1,34 @@
 # services/files_service.dart
 
-**Archivo:** `lib/services/files_service.dart`
-**Rol:** Cliente HTTP para todas las operaciones de archivos contra el backend. Encapsula las llamadas de red y devuelve modelos tipados.
+**File:** `lib/services/files_service.dart`
 
----
+## Purpose
 
-## Clase `FilesService`
+HTTP client for all file operations against the SrvFiles backend (or the embedded relay in server mode). Encapsulates network calls and returns typed models. Supports session-token authentication via the `X-SrvFiles-Token` header.
 
-```dart
-class FilesService {
-  FilesService(this._config);
-  final ApiConfig _config;
-}
-```
+## Exports / Public API
 
-Recibe un `ApiConfig` en el constructor, que contiene la URL base del servidor. Todos los métodos usan `_config` para construir las URLs.
+### `FilesService`
 
----
+**Constructor:** `FilesService(ApiConfig config)`
 
-## Método `getFiles`
+| Member | Description |
+|---|---|
+| `void setToken(String token)` | Stores a session token included as `X-SrvFiles-Token` in all subsequent requests. |
+| `String? get sessionToken` | Exposes the current token (used by `PreviewService`). |
+| `Map<String, String> get authHeaders` | Returns `{'X-SrvFiles-Token': token}` if a token is set, or `{}`. Public for use in direct HTTP calls (e.g. `FilesController.download`). |
+| `Future<List<FileInfo>> getFiles()` | `GET /api/files` — throws on non-200. |
+| `Future<void> uploadFile(File file, {void Function(double)? onProgress})` | `POST /api/files/upload` (multipart, field name `'files'`). Uses streaming with `file.openRead()` to avoid loading large files into memory. Throws on non-200. |
+| `Future<void> uploadFiles(List<File> files, {void Function(double)? onProgress})` | Same as `uploadFile` but sends all files in a single multipart request. |
+| `Future<bool> deleteFile(String filename)` | `DELETE /api/files/<encodedName>` — returns `true` on 200, `false` otherwise. |
+| `Future<DiskStats> getStats()` | `GET /api/files/stats` — throws on non-200. |
+| `Future<AppConfig> getConfig()` | `GET /api/config` — throws on non-200. |
+| `String getDownloadUrl(String filename)` | Delegates to `_config.downloadUrl(filename)` — no network call. |
+| `Future<bool> healthCheck()` | `GET /api/health` with 3 s timeout. Returns `false` on any error or non-200 status. |
 
-```dart
-Future<List<FileInfo>> getFiles() async {
-  final response = await http.get(Uri.parse(_config.filesUrl));
-  final json = jsonDecode(response.body);
-  final list = json['files'] as List;
-  return list.map((f) => FileInfo.fromJson(f)).toList();
-}
-```
+## Key behaviors
 
-Obtiene la lista de archivos del servidor. `json['files'] as List` es un casteo que convierte el `dynamic` a `List`, y luego `.map` convierte cada elemento en un `FileInfo` con el constructor `fromJson`.
-
----
-
-## Método `uploadFile`
-
-```dart
-Future<void> uploadFile(File file) async {
-  final request = http.MultipartRequest('POST', Uri.parse('${_config.filesUrl}/upload'));
-  request.files.add(await http.MultipartFile.fromPath('files', file.path));
-  await request.send();
-}
-```
-
-### `http.MultipartRequest`
-
-HTTP multipart/form-data es el formato estándar para subir archivos. Es diferente de un POST normal (JSON): en lugar de un cuerpo de texto, contiene "partes" separadas por un boundary, cada parte con su propio header.
-
-`MultipartFile.fromPath` lee el archivo del sistema de archivos y lo adjunta. El nombre del campo `'files'` debe coincidir con el que espera Multer en el backend.
-
----
-
-## Método `uploadFiles`
-
-```dart
-Future<void> uploadFiles(List<File> files) async {
-  final request = http.MultipartRequest('POST', Uri.parse('${_config.filesUrl}/upload'));
-  for (final file in files) {
-    request.files.add(await http.MultipartFile.fromPath('files', file.path));
-  }
-  await request.send();
-}
-```
-
-Variante que sube múltiples archivos en un solo request multipart. El backend recibe todos los archivos en `req.files`.
-
----
-
-## Método `deleteFile`
-
-```dart
-Future<void> deleteFile(String filename) async {
-  await http.delete(
-    Uri.parse('${_config.filesUrl}/${Uri.encodeComponent(filename)}'),
-  );
-}
-```
-
-Usa el método HTTP DELETE. `Uri.encodeComponent` codifica el nombre del archivo para que sea válido en la URL.
-
----
-
-## Método `getStats`
-
-```dart
-Future<DiskStats> getStats() async {
-  final response = await http.get(Uri.parse(_config.statsUrl));
-  return DiskStats.fromJson(jsonDecode(response.body));
-}
-```
-
----
-
-## Método `getConfig`
-
-```dart
-Future<AppConfig> getConfig() async {
-  final response = await http.get(Uri.parse(_config.configUrl));
-  return AppConfig.fromJson(jsonDecode(response.body));
-}
-```
-
----
-
-## Método `getDownloadUrl`
-
-```dart
-String getDownloadUrl(String filename) => _config.downloadUrl(filename);
-```
-
-Wrapper que delega a `ApiConfig.downloadUrl`. Permite que el `HomeScreen` obtenga la URL de descarga sin importar `ApiConfig` directamente.
-
----
-
-## Método `healthCheck`
-
-```dart
-Future<bool> healthCheck() async {
-  try {
-    final response = await http.get(Uri.parse(_config.healthUrl))
-        .timeout(const Duration(seconds: 3));
-    return response.statusCode == 200;
-  } catch (_) {
-    return false;
-  }
-}
-```
-
-Verifica si el servidor sigue respondiendo. Retorna `false` ante cualquier error o timeout. Usado en `HomeScreen` para detectar pérdida de conexión.
+- All methods that make network requests include `_authHeaders` so they work on both unauthenticated (relay-only) and PIN-protected (server mode) endpoints.
+- Error handling: all mutating methods throw `Exception` on non-200 status; `healthCheck` and `deleteFile` return a boolean instead.
+- Logging: all methods log at `debug`/`info`/`warn`/`error` levels via `AppLogger.instance`.
+- Dependencies: `http`, `ApiConfig`, `FileInfo`, `DiskStats`, `AppConfig`, `AppLogger`.

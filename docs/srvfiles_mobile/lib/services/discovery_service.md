@@ -1,103 +1,37 @@
 # services/discovery_service.dart
 
-**Archivo:** `lib/services/discovery_service.dart`
-**Rol:** Escanea la subnet local en busca de instancias de SrvFiles. Equivalente al `discovery.service.ts` del backend, pero ejecutándose en el dispositivo móvil.
+**File:** `lib/services/discovery_service.dart`
 
----
+## Purpose
 
-## Clase `DiscoveredServer`
+Scans the local subnet for SrvFiles server instances. Used by `ConnectSheet`, `SplashScreen`, and `ServerController` to auto-discover servers and direct-mode relay devices.
 
-```dart
-class DiscoveredServer {
-  final String ip;
-  final String url;
-  final String appName;
-}
-```
+## Exports / Public API
 
-El resultado de encontrar un servidor. Mismo formato que el backend devuelve en `/api/discovery`.
+### `DiscoveredServer`
 
----
+| Field | Description |
+|---|---|
+| `String ip` | Hostname/IP of the server. |
+| `String url` | Full base URL, e.g. `http://192.168.1.5:3001`. |
+| `String appName` | Display name from `/api/health`. |
 
-## Función `probe`
+`factory DiscoveredServer.fromJson(Map<String, dynamic>)` — for deserialising results from `scanNetwork`.
 
-```dart
-Future<DiscoveredServer?> probe(String ip) async {
-  try {
-    final url = 'http://$ip:3001/api/health';
-    final response = await http.get(Uri.parse(url))
-        .timeout(const Duration(milliseconds: 500));
-    if (response.statusCode == 200) {
-      final json = jsonDecode(response.body);
-      if (json['status'] == 'ok' && json['app'] == 'SrvFiles') {
-        return DiscoveredServer(
-          ip: ip,
-          url: 'http://$ip:3001',
-          appName: json['appName'] ?? 'SrvFiles',
-        );
-      }
-    }
-  } catch (_) {}
-  return null;
-}
-```
+### `DiscoveryService`
 
-Intenta conectar al endpoint `/api/health` de una IP específica con un timeout de 500ms. Si responde correctamente, retorna el servidor encontrado. Si no responde o da error, retorna `null` silenciosamente (el `catch (_)` descarta cualquier excepción).
+| Method | Description |
+|---|---|
+| `Future<DiscoveredServer?> probe(String serverUrl, {Duration timeout = 3s})` | GETs `<serverUrl>/api/health`. Returns a `DiscoveredServer` if the response is `200`, `status == 'ok'`, and `app.toLowerCase() == 'srvfiles'`. Returns `null` on any error or mismatch. |
+| `Future<bool> tryConnect(String serverUrl)` | Convenience wrapper around `probe` that returns a `bool`. Used by `SplashScreen` to quickly re-check the last known server. Logs errors via `AppLogger`. |
+| `Future<List<DiscoveredServer>> scanLan()` | Determines the local subnet from the device's LAN IP (see `_getLocalIp`), then fires 254 parallel `probe` calls (each with 800 ms timeout) skipping the device's own IP. Returns all successful probes. |
+| `Future<List<DiscoveredServer>> scanNetwork(String serverUrl)` | Server-assisted scan: calls `<serverUrl>/api/discovery/scan` (15 s timeout) and deserialises the result list. Used as a fallback when the local scan isn't possible. |
 
-El patrón es idéntico al `probeHost()` del backend: 500ms de timeout, nunca rechaza la promesa/Future.
+## Key behaviors
 
----
-
-## Función `tryConnect`
-
-```dart
-Future<DiscoveredServer?> tryConnect(String url) async {
-  // Extrae la IP de la URL y la prueba directamente
-}
-```
-
-Variante de `probe` que acepta una URL completa en lugar de una IP. Usada en `SplashScreen` para verificar el último servidor conocido antes de hacer el escaneo completo.
-
----
-
-## Función `scanLan`
-
-```dart
-Future<List<DiscoveredServer>> scanLan() async {
-  final localIp = await _getLocalIp();
-  if (localIp == null) return [];
-
-  final parts = localIp.split('.');
-  final subnet = '${parts[0]}.${parts[1]}.${parts[2]}';
-  final ips = List.generate(254, (i) => '$subnet.${i + 1}');
-
-  final results = await Future.wait(ips.map(probe));
-  return results.whereType<DiscoveredServer>().toList();
-}
-```
-
-### `Future.wait`
-
-Lanza las 254 peticiones simultáneamente, igual que `Promise.all` en JavaScript. El tiempo total es el de la petición más lenta (~500ms), no la suma (127 segundos si fuera secuencial).
-
-### `.whereType<DiscoveredServer>()`
-
-Filtra los `null` del array de resultados y convierte el tipo a `List<DiscoveredServer>`. Es más idiomático que `.where((r) => r != null).cast<DiscoveredServer>()`.
-
----
-
-## Función `_getLocalIp`
-
-```dart
-Future<String?> _getLocalIp() async {
-  final interfaces = await NetworkInterface.list(type: InternetAddressType.IPv4);
-  for (final iface in interfaces) {
-    for (final addr in iface.addresses) {
-      if (!addr.isLoopback) return addr.address;
-    }
-  }
-  return null;
-}
-```
-
-Obtiene la IP local del dispositivo usando la API de red de Dart (`dart:io`). Itera por las interfaces de red, descarta las de loopback (`127.0.0.1`), y retorna la primera IP LAN que encuentra.
+- **`probe` timeout**: 800 ms in `scanLan`, 3 s in direct callers (configurable parameter).
+- **`app` field case-insensitive**: `json['app'].toLowerCase() == 'srvfiles'` so both `'srvfiles'` (backend) and `'SrvFiles'` (mobile relay) are matched.
+- **`appName` resolution**: prefers `json['appName']`, falls back to `json['app']`, then `'SrvFiles'`.
+- **`_getLocalIp`**: iterates `NetworkInterface.list(IPv4, noLoopback)`, prefers RFC-1918 ranges (`192.168.*`, `10.*`, `172.*`), falls back to any non-loopback address.
+- **`Future.wait`**: all 254 probes run concurrently — total scan time ≈ slowest probe (≈ 800 ms), not 254 × 800 ms.
+- Dependencies: `dart:io`, `http`, `AppLogger`.

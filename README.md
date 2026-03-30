@@ -24,6 +24,7 @@ App Android para el ecosistema [SrvFiles](https://github.com/dotdeivid/srvfiles)
 - Servicio en primer plano: el WebSocket sigue activo con la pantalla bloqueada (solo cuando la app está en segundo plano)
 - Notificaciones locales al completar descargas o transferencias P2P (Android 13+ pide permiso al primer arranque)
 - **Logging estructurado** — AppLogger con niveles debug/info/warn/error; visible en consola en debug y en archivo en release
+- **Ícono unificado** — mismo ícono SF violeta que web y Tauri; visible en el launcher y el splash screen
 
 ---
 

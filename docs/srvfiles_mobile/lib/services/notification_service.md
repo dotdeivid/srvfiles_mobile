@@ -1,107 +1,30 @@
 # services/notification_service.dart
 
-**Archivo:** `lib/services/notification_service.dart`
-**Rol:** Singleton que encapsula el plugin de notificaciones locales. Gestiona el foreground service de Android (notificación persistente) y muestra notificaciones del sistema cuando se completa una descarga o transferencia.
+**File:** `lib/services/notification_service.dart`
 
----
+## Purpose
 
-## Patrón Singleton
+Singleton service that wraps `flutter_local_notifications`. Shows system notifications for incoming transfer requests, completed P2P transfers, and completed downloads. Also manages the Android foreground service notification that keeps the process alive in the background.
 
-```dart
-class NotificationService {
-  static final NotificationService _instance = NotificationService._internal();
-  factory NotificationService() => _instance;
-  NotificationService._internal();
-}
-```
+## Exports / Public API
 
-El patrón singleton garantiza que exista una sola instancia de `NotificationService` en toda la app. El constructor privado `_internal()` impide crear instancias con `NotificationService()` normal; el factory constructor devuelve siempre `_instance`.
+### `NotificationService` (singleton)
 
-¿Por qué singleton? El plugin de notificaciones (`FlutterLocalNotificationsPlugin`) debe inicializarse una sola vez. Con singleton, `init()` solo se ejecuta una vez aunque múltiples partes del código llamen `NotificationService()`.
+| Method | Description |
+|---|---|
+| `Future<void> init()` | Initialises the plugin (idempotent — returns early if already initialised). Configures `@mipmap/ic_launcher` for Android and `DarwinInitializationSettings` (alerts + sound, no badge) for iOS. On Android 13+ requests the `POST_NOTIFICATIONS` permission at runtime. Logs success or error via `AppLogger`. |
+| `Future<void> showDownloadComplete(String fileName)` | Notification: "Descarga completada" / `"<fileName>" se descargó correctamente`. |
+| `Future<void> showTransferComplete(String fileName, String fromName)` | Notification: "Archivo recibido" / `"<fileName>" de <fromName>`. |
+| `Future<void> showIncomingTransfer(String fromName, String fileName)` | Notification: `"<fromName> quiere enviarte un archivo"` / `"<fileName> — Abrí la app para aceptar o rechazar"`. |
+| `Future<void> startForeground()` | Android only. Shows a persistent low-priority notification via `startForegroundService` (channel `srvfiles_bg`). Falls back to `_plugin.show` if the API is unavailable. No-op on iOS. |
+| `Future<void> stopForeground()` | Android only. Calls `stopForegroundService()` and `cancel(_idForeground)`. No-op on iOS. |
 
----
+## Key behaviors
 
-## Método `init`
-
-```dart
-Future<void> init() async {
-  const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
-  const iosInit = DarwinInitializationSettings();
-  const settings = InitializationSettings(android: androidInit, iOS: iosInit);
-  await _plugin.initialize(settings);
-}
-```
-
-Inicializa el plugin con la configuración específica de cada plataforma:
-- **Android**: `@mipmap/ic_launcher` es el ícono de la app que aparece en la notificación.
-- **iOS** (`DarwinInitializationSettings`): usa el nombre Darwin (el kernel de macOS/iOS) porque el plugin es multiplataforma Apple.
-
----
-
-## Métodos `startForeground` y `stopForeground`
-
-```dart
-Future<void> startForeground() async { ... }
-Future<void> stopForeground() async { ... }
-```
-
-Controlan el **foreground service de Android**: una notificación persistente que mantiene vivo el proceso cuando la app está en segundo plano.
-
-`HomeScreen` los llama desde `didChangeAppLifecycleState`:
-- `startForeground()` al pasar a `AppLifecycleState.paused` (app minimizada o pantalla bloqueada).
-- `stopForeground()` al volver a `AppLifecycleState.resumed` (usuario abre la app de nuevo) y también en `dispose`.
-
-El foreground service **nunca está activo mientras el usuario usa la app en primer plano**.
-
----
-
-## Método `showDownloadComplete`
-
-```dart
-Future<void> showDownloadComplete(String filename) async {
-  await _show(
-    id: 1,
-    title: 'Descarga completa',
-    body: '"$filename" guardado correctamente',
-  );
-}
-```
-
----
-
-## Método `showTransferComplete`
-
-```dart
-Future<void> showTransferComplete(String filename, String peerName) async {
-  await _show(
-    id: 2,
-    title: 'Archivo recibido',
-    body: '"$filename" de $peerName',
-  );
-}
-```
-
----
-
-## Método `_show`
-
-```dart
-Future<void> _show({
-  required int id,
-  required String title,
-  required String body,
-}) async {
-  const androidDetails = AndroidNotificationDetails(
-    'srvfiles_channel',
-    'SrvFiles',
-    importance: Importance.high,
-    priority: Priority.high,
-  );
-  const details = NotificationDetails(android: androidDetails);
-  await _plugin.show(id, title, body, details);
-}
-```
-
-El método interno que realmente muestra la notificación. El `id` es un número entero que identifica la notificación — si se muestra otra con el mismo `id`, reemplaza la anterior (útil para no acumular notificaciones del mismo tipo).
-
-El `channel` de Android (`'srvfiles_channel'`) es un grupo lógico de notificaciones que el usuario puede silenciar individualmente desde la configuración del sistema.
+- **Notification IDs**: `showDownloadComplete`, `showTransferComplete`, `showIncomingTransfer` use `DateTime.now().millisecondsSinceEpoch ~/ 1000` as the ID, so rapid successive notifications don't replace each other.
+- **Foreground service ID**: constant `_idForeground = 1` (replaces the previous notification if called again).
+- **Android channels**:
+  - `'srvfiles_bg'` ("SrvFiles activo"): `Importance.low`, no sound, no vibration, `ongoing: true` — the foreground service notification.
+  - `'srvfiles_transfers'` ("Transferencias"): `Importance.defaultImportance` — transfer/download notifications.
+- **`didChangeAppLifecycleState` integration** (in `HomeScreen`): `startForeground()` is called on `AppLifecycleState.paused`; `stopForeground()` is called on `resumed` and in `dispose`. The foreground service is never active while the user is using the app.
+- Dependencies: `flutter_local_notifications`, `AppLogger`, `dart:io`.

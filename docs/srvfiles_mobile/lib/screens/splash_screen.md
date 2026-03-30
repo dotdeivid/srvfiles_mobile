@@ -1,158 +1,62 @@
 # screens/splash_screen.dart
 
-**Archivo:** `lib/screens/splash_screen.dart`
-**Rol:** Pantalla inicial. Escanea la red local, muestra los servidores encontrados, y permite conectar manualmente o continuar sin servidor.
+**File:** `lib/screens/splash_screen.dart`
 
----
+## Purpose
 
-## Estructura del widget
+Initial screen. Scans the LAN for SrvFiles servers, shows discovered servers for quick selection, and provides manual IP entry, "direct send" mode, and "use this device as server" options.
 
-```
-SplashScreen (StatefulWidget)
-└── _SplashScreenState
-    ├── _scan()             — escanea la red
-    ├── _saveLastServer()   — persiste la URL del servidor
-    ├── _ensureDeviceName() — pide nombre si es primer lanzamiento
-    ├── _onServerSelected() — navega al HomeScreen con servidor
-    ├── _onSkipServer()     — navega al HomeScreen sin servidor
-    ├── _connectManual()    — conecta desde input manual
-    └── _buildServerList()  — construye la lista de resultados
-```
+## Exports / Public API
 
----
+### `SplashScreen extends StatefulWidget`
 
-## Estado
+No constructor parameters.
 
-```dart
-bool _scanning = true;
-List<DiscoveredServer> _servers = [];
-final _manualController = TextEditingController();
-```
+## State (`_SplashScreenState`)
 
----
+| Field | Description |
+|---|---|
+| `DiscoveryService _discoveryService` | Used for all probe/scan operations. |
+| `bool _searching` | `true` while a scan is in progress (spinner shown, buttons disabled). |
+| `String? _error` | Error message displayed below the input. |
+| `TextEditingController _ipController` | Manual IP input. |
+| `List<DiscoveredServer> _foundServers` | Accumulated discovered servers (last-known + full scan merged without duplicates). |
 
-## Método `_scan`
+## Key behaviors — `_scan()`
 
-```dart
-Future<void> _scan() async {
-  setState(() { _scanning = true; _servers = []; });
+Two-phase discovery:
+1. **Last known server probe**: reads `'srvfiles-last-server'` from `SharedPreferences` and calls `_discoveryService.probe(url)`. If it responds, adds it to `_foundServers` immediately so the user sees it before the full scan completes.
+2. **Full LAN scan**: calls `_discoveryService.scanLan()` (254 parallel probes). Results are merged with phase-1 results, deduplicating by URL.
 
-  // Primero: probar el último servidor conocido
-  final lastUrl = prefs.getString('last_server');
-  if (lastUrl != null) {
-    final server = await DiscoveryService().tryConnect(lastUrl);
-    if (server != null && mounted) {
-      _onServerSelected(server.url);
-      return; // Auto-connect exitoso
-    }
-  }
+The scan does **not** auto-navigate — the user always taps to connect.
 
-  // Si no hay último servidor o no responde: escanear la red
-  final results = await DiscoveryService().scanLan();
-  if (mounted) {
-    setState(() { _servers = results; _scanning = false; });
-  }
-}
-```
+## Key behaviors — navigation
 
-### Estrategia de dos pasos
+| Method | Destination |
+|---|---|
+| `_onServerSelected(url)` | Saves the URL to `'srvfiles-last-server'` then navigates to `HomeScreen(serverUrl: url)`. |
+| `_onSkipServer()` | Navigates to `HomeScreen(serverUrl: null)` — direct P2P relay mode. |
+| `_onBeServer()` | Navigates to `HomeScreen(serverUrl: null, autoServerMode: true)` — activates server mode immediately. |
 
-1. **Reconexión rápida**: si el usuario usó un servidor antes, intenta conectar directamente a él. Si responde, navega sin mostrar la pantalla de selección.
-2. **Descubrimiento**: si no hay servidor previo, o si ya no responde, escanea toda la subnet.
+All three use `pushReplacement` so the splash screen is removed from the navigation stack.
 
-Esto hace que la experiencia sea fluida: en el uso cotidiano (mismo servidor de siempre), la app conecta automáticamente en ~500ms.
+## Key behaviors — manual connect
 
----
+`_connectManual()`:
+1. Normalises the input (prepends `http://`, appends `:3001` if no port).
+2. Calls `_discoveryService.tryConnect(url)` to verify the server is reachable.
+3. If reachable: calls `_onServerSelected(url)`.
+4. If not: sets `_error` with "No se pudo conectar a ...".
 
-## Método `_saveLastServer`
+## Key behaviors — UI
 
-```dart
-Future<void> _saveLastServer(String url) async {
-  final prefs = await SharedPreferences.getInstance();
-  await prefs.setString('last_server', url);
-}
-```
+- **Discovered server list** (`_buildServerList`): shown only when `_foundServers.isNotEmpty`. Each row is a `_ServerRow` widget with the server's name, IP, and a "Conectar" `TextButton`. Rows are disabled (taps blocked) while `_searching` is `true`.
+- **"Buscando servidores..."** spinner replaces the "Ingresá la IP" label while scanning.
+- **Three action buttons**: "Conectar" (ElevatedButton), "Envío directo" (OutlinedButton), "Usar este dispositivo como servidor" (TextButton). All disabled while `_searching`.
+- **Hero animation**: the logo container uses `tag: 'srvfiles-logo'` for a smooth transition to `HomeScreen` if a matching Hero is present there.
 
-Persiste la URL del servidor seleccionado para la próxima vez que la app se abra.
+## Private widget — `_ServerRow`
 
----
+Renders a single discovered server: pulsing dot, computer icon, `appName`, IP, and a "Conectar" button. Disabled (null `onTap`) while `_searching`.
 
-## Método `_ensureDeviceName`
-
-```dart
-Future<void> _ensureDeviceName() async {
-  final isFirst = await DeviceNameService().isFirstLaunch();
-  if (!isFirst || !mounted) return;
-
-  final defaultName = DeviceNameService().generateRandomName();
-  final chosen = await NameDialog.show(context, defaultName);
-  if (chosen != null && chosen.trim().isNotEmpty) {
-    await DeviceNameService().saveName(chosen.trim());
-  } else {
-    await DeviceNameService().saveName(defaultName);
-  }
-}
-```
-
-En el primer lanzamiento, muestra el `NameDialog` antes de continuar. Si el usuario omite el diálogo, guarda el nombre aleatorio generado. Esto garantiza que siempre haya un nombre disponible para el protocolo WebSocket.
-
----
-
-## Método `_onServerSelected`
-
-```dart
-Future<void> _onServerSelected(String url) async {
-  await _ensureDeviceName();
-  await _saveLastServer(url);
-  if (!mounted) return;
-  Navigator.of(context).pushReplacement(
-    MaterialPageRoute(builder: (_) => HomeScreen(serverUrl: url)),
-  );
-}
-```
-
-`pushReplacement` reemplaza la pantalla actual en la pila de navegación en lugar de apilarla encima. Esto hace que el botón "atrás" del sistema operativo no vuelva a la `SplashScreen`.
-
----
-
-## Método `_onSkipServer`
-
-```dart
-Future<void> _onSkipServer() async {
-  await _ensureDeviceName();
-  if (!mounted) return;
-  Navigator.of(context).pushReplacement(
-    MaterialPageRoute(builder: (_) => const HomeScreen()),
-  );
-}
-```
-
-Navega al `HomeScreen` sin `serverUrl`. En ese modo, la app solo hace P2P con el relay embebido.
-
----
-
-## Método `_connectManual`
-
-```dart
-void _connectManual() {
-  String url = _manualController.text.trim();
-  if (url.isEmpty) return;
-  if (!url.startsWith('http')) url = 'http://$url';
-  if (!RegExp(r':\d+$').hasMatch(url)) url = '$url:3001';
-  _onServerSelected(url);
-}
-```
-
-Normaliza la entrada del usuario: agrega `http://` si falta, y agrega `:3001` si no hay puerto explícito. El regex `:\d+$` verifica que el string termine con dos puntos y uno o más dígitos.
-
----
-
-## Widget `_ServerRow`
-
-```dart
-class _ServerRow extends StatelessWidget {
-  // Muestra un servidor descubierto con nombre, IP y botón "Conectar"
-}
-```
-
-Widget privado (con prefijo `_`) que renderiza cada servidor en la lista. No tiene acceso directo a `_SplashScreenState`; recibe la acción de conexión como callback.
+- Dependencies: `DiscoveryService`, `AppLogger`, `SharedPreferences`, `HomeScreen`, `GradientText`, `PulsingDot`.

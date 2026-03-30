@@ -1,72 +1,36 @@
 # main.dart
 
-**Archivo:** `lib/main.dart`
-**Rol:** Punto de entrada de la app Flutter. Inicializa servicios globales, configura la barra de sistema, y monta el widget raíz.
+**File:** `lib/main.dart`
 
----
+## Purpose
 
-## Función `main`
+Entry point of the SrvFiles Flutter app. Initialises global services (`AppLogger`, `NotificationService`), configures the Android/iOS system UI overlay, and mounts the root widget.
 
-```dart
-Future<void> main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-  await NotificationService().init();
-  SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
-    statusBarColor: Colors.transparent,
-    statusBarIconBrightness: Brightness.light,
-  ));
-  runApp(const SrvFilesApp());
-}
-```
+## Exports / Public API
 
-### `WidgetsFlutterBinding.ensureInitialized()`
+### `main()` (async)
 
-Flutter separa el motor de renderizado del framework de widgets. Antes de poder llamar código de plataforma (plugins, FFI, etc.), el motor debe estar inicializado. Si `main` es `async` y llama a plugins antes de `runApp`, esta línea es obligatoria.
+Execution order:
+1. `WidgetsFlutterBinding.ensureInitialized()` — required before any plugin call in an async `main`.
+2. `await AppLogger.instance.init()` — initialises the persistent log file at `Documents/SrvFiles/logs/errors.txt`.
+3. `await NotificationService().init()` — initialises `flutter_local_notifications` and, on Android 13+, requests the notification permission.
+4. `SystemChrome.setSystemUIOverlayStyle(...)` — configures:
+   - `statusBarColor: Colors.transparent` — content bleeds behind the status bar.
+   - `statusBarIconBrightness: Brightness.light` — white status bar icons (dark theme).
+   - `systemNavigationBarColor: AppColors.bgPrimary` — navigation bar matches app background.
+   - `systemNavigationBarIconBrightness: Brightness.light` — white navigation bar icons.
+5. `runApp(const SrvFilesApp())`.
 
-Sin ella, llamar `NotificationService().init()` lanzaría un error porque el canal de comunicación con la plataforma nativa todavía no existe.
+### `SrvFilesApp extends StatelessWidget`
 
-### `await NotificationService().init()`
+Root `MaterialApp` configured with:
+- `title: 'SrvFiles'`
+- `debugShowCheckedModeBanner: false`
+- `theme: AppTheme.dark`
+- `home: const SplashScreen()` — first screen, auto-discovers and connects to a LAN server.
 
-Inicializa el plugin de notificaciones de forma asíncrona antes de que la app arranque. Esto es necesario porque en iOS hay que registrar el canal de notificaciones antes del primer frame, no después.
+## Key behaviors
 
-### `SystemChrome.setSystemUIOverlayStyle`
-
-Controla el aspecto de la barra de estado del sistema operativo (la franja superior con la hora e iconos de señal):
-- **`statusBarColor: Colors.transparent`**: la barra de estado es transparente, el contenido de la app se ve detrás.
-- **`statusBarIconBrightness: Brightness.light`**: los íconos de la barra de estado son blancos (para fondos oscuros).
-
-Esto es parte de la integración con el tema dark de la app.
-
----
-
-## Widget `SrvFilesApp`
-
-```dart
-class SrvFilesApp extends StatelessWidget {
-  const SrvFilesApp({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'SrvFiles',
-      debugShowCheckedModeBanner: false,
-      theme: AppTheme.dark,
-      home: const SplashScreen(),
-    );
-  }
-}
-```
-
-`SrvFilesApp` es el widget raíz. Es un `StatelessWidget` porque no tiene estado propio — solo configura el `MaterialApp`.
-
-### `MaterialApp`
-
-El widget de nivel más alto de una app Material Design. Configura:
-- **`title`**: nombre de la app que aparece en el task switcher del sistema operativo.
-- **`debugShowCheckedModeBanner: false`**: elimina el banner rojo "DEBUG" que aparece en la esquina en modo desarrollo.
-- **`theme: AppTheme.dark`**: el tema visual completo definido en `lib/theme/app_theme.dart`.
-- **`home: SplashScreen()`**: la primera pantalla que ve el usuario.
-
-### ¿Por qué `SplashScreen` y no `HomeScreen`?
-
-La `SplashScreen` se encarga de detectar automáticamente si hay un servidor SrvFiles en la red local y, si lo hay, conectarse antes de mostrar la pantalla principal. Si se fuera directo a `HomeScreen`, el usuario vería la app vacía y tendría que conectar manualmente.
+- `AppLogger` is initialised before `NotificationService` so that any initialisation error in the notification service can be logged.
+- `SplashScreen` is the home route rather than `HomeScreen` so that server discovery happens before the main UI appears.
+- Dependencies: `AppLogger`, `NotificationService`, `AppTheme`, `AppColors`, `SplashScreen`.
