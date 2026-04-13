@@ -134,7 +134,8 @@ class FileListItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Semantics(
+    return RepaintBoundary(
+      child: Semantics(
       label: '${file.name}, ${formatBytes(file.size)}',
       child: InkWell(
         onLongPress: () => _showContextMenu(context),
@@ -245,6 +246,7 @@ class FileListItem extends StatelessWidget {
             ],
           ),
         ),
+      ),
       ),
     );
   }

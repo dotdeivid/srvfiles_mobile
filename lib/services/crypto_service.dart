@@ -71,16 +71,18 @@ class CryptoService {
     );
 
     final keyBytes = await derivedKey.extractBytes();
-    return SessionCipher(SecretKey(keyBytes));
+    return SessionCipher(SecretKey(keyBytes), keyBytes);
   }
 }
 
 /// AES-256-GCM cipher for a single WebSocket session.
 class SessionCipher {
   final SecretKey _key;
+  /// Raw key bytes — exposed for isolate-based encryption via compute().
+  final List<int> keyBytes;
   static final _aesGcm = AesGcm.with256bits();
 
-  SessionCipher(this._key);
+  SessionCipher(this._key, this.keyBytes);
 
   /// Encrypts [plaintext] (JSON string) and returns `{'iv': ..., 'data': ...}`.
   /// The `data` field is base64([cipherText][16-byte GCM tag]).

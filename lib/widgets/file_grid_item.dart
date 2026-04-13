@@ -143,7 +143,8 @@ class FileGridItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Semantics(
+    return RepaintBoundary(
+      child: Semantics(
       label: '${file.name}, ${formatBytes(file.size)}',
       child: GestureDetector(
         onLongPress: () => _showContextMenu(context),
@@ -244,6 +245,7 @@ class FileGridItem extends StatelessWidget {
             ],
           ),
         ),
+      ),
       ),
     );
   }

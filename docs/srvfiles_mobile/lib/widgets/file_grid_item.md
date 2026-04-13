@@ -55,25 +55,32 @@ Un panel que aparece desde la parte inferior de la pantalla con animación. El `
 ## Build
 
 ```dart
-GestureDetector(
-  onLongPress: () => _showContextMenu(context),
-  child: GlassCard(
-    padding: ...,
-    child: Column(
-      children: [
-        Text(getFileIcon(file.name), style: TextStyle(fontSize: 36)),
-        Text(file.name, overflow: TextOverflow.ellipsis, maxLines: 2),
-        Text(formatBytes(file.size)),
-        const Spacer(),
-        Row(children: [
-          IconButton(onPressed: onDownload, ...),
-          IconButton(onPressed: onShare, ...),
-        ]),
-      ],
+RepaintBoundary(
+  child: Semantics(
+    label: '...',
+    child: GestureDetector(
+      onLongPress: () => _showContextMenu(context),
+      child: GlassCard(
+        padding: ...,
+        child: Column(
+          children: [
+            Text(getFileIcon(file.name), style: TextStyle(fontSize: 36)),
+            Text(file.name, overflow: TextOverflow.ellipsis, maxLines: 2),
+            Text(formatBytes(file.size)),
+            const Spacer(),
+            Row(children: [
+              IconButton(onPressed: onDownload, ...),
+              IconButton(onPressed: onShare, ...),
+            ]),
+          ],
+        ),
+      ),
     ),
   ),
 )
 ```
+
+El `RepaintBoundary` como raíz aísla la capa de repintado de cada tarjeta del resto de la grilla — animaciones o actualizaciones de estado en una tarjeta no invalidan las adyacentes.
 
 `GestureDetector` intercepta gestos que el widget hijo no maneja por defecto. `onLongPress` es el gesto de mantener presionado (~500ms).
 

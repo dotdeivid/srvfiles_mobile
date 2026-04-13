@@ -56,7 +56,7 @@ WebSocket client for the SrvFiles P2P transfer protocol. Manages the connection 
 | `void reject(String transferId)` | Sends `send-reject`. |
 | `void cancel(String transferId)` | Sends `send-cancel`. |
 | `void rename(String newName)` | Sends `rename`. |
-| `Future<void> sendFile({transferId, fileBytes, onProgress?})` | Sends the file as 256 KB binary chunks. Each frame is `[36-byte transferId][chunk data]`. Yields to the event loop after each chunk with `Future.delayed(Duration.zero)`. Sends `send-complete` after all chunks. |
+| `Future<void> sendFile({transferId, fileBytes, onProgress?})` | Sends the file as 256 KB binary chunks. Each frame is `[36-byte transferId][chunk data]`. When encrypted, calls `compute(_isolateEncryptBinary, ...)` to run AES-256-GCM on a background isolate. Yields to the event loop after each chunk. Sends `send-complete` after all chunks. |
 | `void dispose()` | Closes the WebSocket and cancels the subscription. |
 
 ## Key behaviors — ECDH key exchange
@@ -73,7 +73,7 @@ JSON messages are sent through `_sendJson`, which maintains a `Future<void> _sen
 - Without cipher: sends directly to the channel sink.
 - With cipher: encrypts asynchronously in the queue, wraps in `{'type': 'encrypted', 'iv': ..., 'data': ...}`.
 
-Binary chunks are encrypted with `cipher.encryptBinary` (inline await, no queue — binary order is maintained by the sequential `while` loop).
+Binary chunks are encrypted/decrypted via `compute()` using the top-level functions `_isolateEncryptBinary` / `_isolateDecryptBinary`, which run AES-256-GCM on a background Dart isolate to keep the UI thread free. The key is passed as `cipher.keyBytes` (raw bytes) since `SecretKey` is not isolate-portable. Binary order is maintained by the sequential `while` loop on the send side.
 
 ## Key behaviors — binary frame format
 

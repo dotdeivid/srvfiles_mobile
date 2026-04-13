@@ -56,13 +56,19 @@ InkWell(
 ## Estructura visual
 
 ```
-Row
-├── Text(emoji)              22px
-├── Column (Expanded)
-│   ├── Text(nombre)         14px, negrita, elipsis
-│   └── Text(tamaño)         12px, muted
-├── IconButton(descargar)
-└── IconButton(compartir)
+RepaintBoundary
+└── Semantics
+    └── InkWell
+        └── Container
+            └── Row
+                ├── Text(emoji)              22px
+                ├── Column (Expanded)
+                │   ├── Text(nombre)         14px, negrita, elipsis
+                │   └── Text(tamaño)         12px, muted
+                ├── IconButton(descargar)
+                └── IconButton(compartir)
 ```
 
 `Expanded` hace que la columna de texto tome todo el espacio horizontal disponible, empujando los botones al extremo derecho. Sin `Expanded`, el `Row` no sabría cómo distribuir el espacio.
+
+`RepaintBoundary` aísla la capa de repintado de este widget del resto del árbol. Cuando un item adyacente en la lista cambia de estado (p.ej. progreso de descarga), Flutter puede redibujar solo ese item sin invalidar toda la lista. Especialmente importante en listas largas con múltiples ítems actualizándose en paralelo.

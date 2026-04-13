@@ -9,6 +9,13 @@ import '../services/app_logger.dart';
 import '../utils/file_type_helper.dart';
 import '../utils/format.dart';
 
+class _PreviewCacheEntry {
+  final String path;
+  final DateTime _expiresAt;
+  _PreviewCacheEntry(this.path) : _expiresAt = DateTime.now().add(const Duration(minutes: 5));
+  bool get isValid => DateTime.now().isBefore(_expiresAt);
+}
+
 /// Handles opening a file preview.
 /// Server files are downloaded to a temp path and cleaned up on close.
 /// Local/received files are opened directly.
@@ -16,6 +23,7 @@ class PreviewService {
   PreviewService._();
 
   static int _maxBytes = 50 * 1024 * 1024; // default 50 MB
+  static final Map<String, _PreviewCacheEntry> _cache = {};
 
   /// Called once the server config is available.
   static void setMaxPreviewMb(int mb) => _maxBytes = mb * 1024 * 1024;
@@ -95,11 +103,21 @@ class PreviewService {
 
   // ─── Internal ──────────────────────────────────────────────────────
 
+  static String _cacheKey(FileInfo file) => '${file.name}_${file.size}';
+
+  static void clearCache() => _cache.clear();
+
   static Future<String> _downloadToTemp(
     FileInfo file,
     ApiConfig config,
     String? sessionToken,
   ) async {
+    final key = _cacheKey(file);
+    final cached = _cache[key];
+    if (cached != null && cached.isValid && await File(cached.path).exists()) {
+      return cached.path;
+    }
+
     final url = config.downloadUrl(file.name);
     final headers = sessionToken != null
         ? {'X-SrvFiles-Token': sessionToken}
@@ -114,6 +132,8 @@ class PreviewService {
     final safeName = file.name.replaceAll(RegExp(r'[^\w\.\-]'), '_');
     final tempFile = File('${tempDir.path}/srvfiles_preview_$safeName');
     await tempFile.writeAsBytes(response.bodyBytes);
+
+    _cache[key] = _PreviewCacheEntry(tempFile.path);
     return tempFile.path;
   }
 

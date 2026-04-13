@@ -19,8 +19,11 @@ Provides ECDH P-256 + HKDF-SHA-256 + AES-256-GCM end-to-end encryption for WebSo
 
 Wraps a derived AES-256-GCM `SecretKey` for a single WebSocket session.
 
-| Method | Description |
+**Constructor:** `SessionCipher(SecretKey key, List<int> keyBytes)`
+
+| Field/Method | Description |
 |---|---|
+| `List<int> keyBytes` | Public field exposing the raw 32-byte key. Used by `TransferService` to pass the key to background isolates via `compute()` without re-deriving it. |
 | `Future<Map<String, String>> encryptJson(String plaintext)` | Encrypts a JSON string and returns `{'iv': <base64>, 'data': <base64>}` where `data` is `[cipherText][16-byte GCM tag]`. |
 | `Future<String> decryptJson(String iv, String data)` | Decrypts an `{'iv', 'data'}` payload back to a JSON string. |
 | `Future<Uint8List> encryptBinary(Uint8List payload)` | Encrypts binary data and returns `[12-byte nonce][cipherText][16-byte GCM tag]`. |

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
+import 'package:cryptography/cryptography.dart';
 import 'package:flutter/foundation.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import '../config/api_config.dart';
@@ -11,6 +12,20 @@ import 'crypto_service.dart';
 
 /// Tamaño de chunk: 256 KB — mismo que el frontend web.
 const int chunkSize = 256 * 1024;
+
+// ─── Top-level isolate helpers ────────────────────────────────────────────────
+
+Future<Uint8List> _isolateEncryptBinary(
+    ({List<int> keyBytes, Uint8List frame}) args) async {
+  final cipher = SessionCipher(SecretKey(args.keyBytes), args.keyBytes);
+  return cipher.encryptBinary(args.frame);
+}
+
+Future<Uint8List> _isolateDecryptBinary(
+    ({List<int> keyBytes, Uint8List data}) args) async {
+  final cipher = SessionCipher(SecretKey(args.keyBytes), args.keyBytes);
+  return cipher.decryptBinary(args.data);
+}
 
 /// Largo del header de transferId en bytes.
 const int transferIdLength = 36;
@@ -112,7 +127,7 @@ class TransferService {
   Future<void> _handleBinary(Uint8List data) async {
     if (_cipher != null) {
       try {
-        data = await _cipher!.decryptBinary(data);
+        data = await compute(_isolateDecryptBinary, (keyBytes: _cipher!.keyBytes, data: data));
       } catch (e, st) {
         AppLogger.instance.error('transfer_service.dart: binary decryption failed', error: e, stack: st);
         return;
@@ -325,7 +340,7 @@ class TransferService {
       frame.setRange(transferIdLength, frame.length, chunk);
 
       if (_cipher != null) {
-        final encrypted = await _cipher!.encryptBinary(frame);
+        final encrypted = await compute(_isolateEncryptBinary, (keyBytes: _cipher!.keyBytes, frame: frame));
         _channel?.sink.add(encrypted);
       } else {
         _channel?.sink.add(frame);

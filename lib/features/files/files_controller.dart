@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:math';
 import 'package:flutter/foundation.dart';
@@ -47,6 +48,7 @@ class FilesController extends ChangeNotifier {
 
   // Search
   String searchQuery = '';
+  Timer? _searchDebounce;
 
   // ─── Computed ────────────────────────────────────────────────────
 
@@ -246,8 +248,17 @@ class FilesController extends ChangeNotifier {
   // ─── Search ─────────────────────────────────────────────────────
 
   void setSearchQuery(String query) {
-    searchQuery = query;
-    notifyListeners();
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 200), () {
+      searchQuery = query;
+      notifyListeners();
+    });
+  }
+
+  @override
+  void dispose() {
+    _searchDebounce?.cancel();
+    super.dispose();
   }
 
   void toggleGridView() {

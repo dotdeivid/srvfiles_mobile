@@ -47,9 +47,10 @@ All parameters are optional; the controller can be created before a server conne
 | `Future<String?> download(FileInfo)` | Downloads a file and saves it to `DownloadDirService.getDownloadsDir`. Returns the local path, or `null` on error. |
 | `Future<String?> prepareShare(FileInfo)` | Downloads a file to a temp directory for sharing via `share_plus`. Returns the temp path. |
 | `Future<bool> deleteFile(String fileName)` | Deletes a file on the server and calls `refreshData`. Returns `false` on error. |
-| `void setSearchQuery(String)` | Updates `searchQuery` and notifies listeners. |
+| `void setSearchQuery(String)` | Debounces 200 ms before updating `searchQuery` and notifying listeners. Cancels any pending debounce timer on each call, so only the final value after a pause triggers a rebuild. |
 | `void toggleGridView()` | Flips `isGridView`. |
 | `static String generateTransferId()` | Generates a UUID v4 using `Random.secure()`. Also used by `TransferController`. |
+| `void dispose()` | Cancels the pending search debounce timer, then calls `super.dispose()`. Must be called when the controller is removed from the widget tree. |
 
 ## Key behaviors
 
@@ -57,4 +58,5 @@ All parameters are optional; the controller can be created before a server conne
 - `connectionLost` is set (not `error`) when `refreshData` fails while `files.isNotEmpty`, so the stale list remains visible.
 - Auth headers for download/share are obtained from `_filesService!.authHeaders`.
 - `generateTransferId` is `static` so `TransferController` can call it without a `FilesController` instance.
-- Dependencies: `FilesService`, `ApiConfig`, `DownloadDirService`, `PreviewService`, `AppLogger`, `file_picker`, `http`, `path_provider`.
+- `setSearchQuery` debounces via `dart:async` `Timer` — the `_searchDebounce` timer is cancelled on every call, so `notifyListeners()` fires only after 200 ms of inactivity. This prevents a full widget rebuild on every keystroke.
+- Dependencies: `dart:async`, `FilesService`, `ApiConfig`, `DownloadDirService`, `PreviewService`, `AppLogger`, `file_picker`, `http`, `path_provider`.
