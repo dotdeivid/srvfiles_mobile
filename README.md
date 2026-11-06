@@ -1,5 +1,7 @@
 # SrvFiles Mobile
 
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+
 App Android para el ecosistema [SrvFiles](https://github.com/dotdeivid/srvfiles) — transferencia de archivos en red local sin internet, sin cuenta, sin configuración.
 
 ## Modos de operación
@@ -108,3 +110,7 @@ Genera el APK y lo publica en GitHub Releases como `SrvFiles-vX.Y.Z.apk`.
 - El PIN se genera automáticamente en cada sesión de servidor y se muestra en el ConnectSheet.
 - La firma de release por defecto es la de debug de Flutter (válida para sideloading). Para Google Play se necesita configurar un keystore.
 - El espacio en disco se obtiene vía `StatFs` nativo (MethodChannel), sin dependencias externas.
+
+## Licencia
+
+Distribuido bajo la licencia [Apache 2.0](LICENSE). © 2026 dotdeivid.
