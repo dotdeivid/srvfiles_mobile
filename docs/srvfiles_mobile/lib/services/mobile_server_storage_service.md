@@ -4,7 +4,11 @@
 
 ## Purpose
 
-Manages the file storage directory for the mobile embedded server (server mode). Files are stored under `Documents/SrvFiles/server/`, separate from P2P received files (`Documents/SrvFiles/Recibidos/`). Used exclusively by `RelayHttpHandler` when server mode is active.
+Manages the file storage directory for the mobile embedded server (server mode). Files are stored in the shared folder `Download/SrvFiles` (`DownloadDirService.getDownloadsDir()`), together with downloads and P2P received files.
+
+> **Carpeta compartida.** Descargas, archivos recibidos y modo servidor usan una sola carpeta: `Download/SrvFiles`, la misma que el servidor web y la app de escritorio. Sin permisos especiales: desde Android 11 la app ve ahí solo los archivos que creó ella; lo copiado a mano con otra app o lo que quede de una instalación anterior no aparece.
+
+`listFilesIn` and `getStats` skip hidden files (`isHiddenFileName`: dotfiles, `.part`, `desktop.ini`, `thumbs.db`). Used exclusively by `RelayHttpHandler` when server mode is active.
 
 ## Exports / Public API
 
@@ -19,7 +23,7 @@ Manages the file storage directory for the mobile embedded server (server mode).
 
 | Method | Description |
 |---|---|
-| `Future<Directory> getDirectory()` | Returns (and caches in `_dir`) the `Documents/SrvFiles/server/` directory, creating it if necessary. |
+| `Future<Directory> getDirectory()` | Returns (and caches in `_dir`) the shared folder from `DownloadDirService`. |
 | `Future<List<FileInfo>> listFiles()` | Lists files sorted by modification date descending. Returns `[]` if the directory doesn't exist yet. Each `FileInfo` has a relative download URL (`/api/files/download/<encodedName>`). |
 | `Future<String> saveFile(String fileName, List<int> bytes)` | Sanitises the filename, resolves name conflicts by appending ` (1)`, ` (2)`, etc., writes bytes, and returns the final saved name. Logs success via `AppLogger`. |
 | `Future<void> deleteFile(String fileName)` | Deletes the file if it exists; logs a warning if not found. |

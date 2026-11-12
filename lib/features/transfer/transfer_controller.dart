@@ -55,6 +55,7 @@ class TransferController extends ChangeNotifier {
     this.showIncomingDialog,
     this.onAuthRequired,
     this.onFilesChanged,
+    this.onFileSaved,
     this.openFile,
   });
 
@@ -68,6 +69,11 @@ class TransferController extends ChangeNotifier {
   ShowIncomingDialog? showIncomingDialog;
   OnAuthRequired? onAuthRequired;
   VoidCallback? onFilesChanged;
+
+  /// Se guardó un archivo recibido en la carpeta compartida (además de
+  /// [onFilesChanged]). Separado porque [onFilesChanged] también lo dispara el
+  /// evento `files-changed` del servidor: avisar desde ahí haría un bucle.
+  VoidCallback? onFileSaved;
   void Function(String path)? openFile;
 
   // ─── Public state ────────────────────────────────────────────────
@@ -586,6 +592,7 @@ class TransferController extends ChangeNotifier {
     );
 
     onFilesChanged?.call();
+    onFileSaved?.call();
   }
 
   void _onSendCancel(TransferService service, String transferId) {

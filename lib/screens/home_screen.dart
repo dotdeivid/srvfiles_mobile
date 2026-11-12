@@ -18,6 +18,8 @@ import '../services/notification_service.dart';
 import '../services/received_files_service.dart';
 import '../services/direct_transfer_pool.dart';
 import '../services/discovery_service.dart';
+import '../services/download_dir_service.dart';
+import '../utils/file_names.dart';
 import '../widgets/gradient_text.dart';
 import '../widgets/disk_stats_bar.dart';
 import '../widgets/search_bar.dart';
@@ -70,6 +72,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool get _isServer => _hasServer || _serverCtrl.relay.isServerMode;
   bool get _isDirectMode => !_hasServer && !_serverCtrl.relay.isServerMode;
 
+  /// Modo servidor de este teléfono: la lista del servidor ya es la carpeta
+  /// compartida, donde también quedan los recibidos (no repetirlos).
+  bool get _isOwnServerMode => !_hasServer && _serverCtrl.relay.isServerMode;
+
   /// Recibidos (separados de los archivos del servidor).
   final ValueNotifier<List<FileInfo>> _receivedFiles = ValueNotifier([]);
 
@@ -96,6 +102,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       },
       onAuthRequired: _handleAuthRequired,
       onFilesChanged: _onFilesChanged,
+      onFileSaved: _serverCtrl.relay.notifyFilesChanged,
       openFile: (path) => OpenFilex.open(path),
     );
     _transferCtrl.addListener(_updateForegroundService);
@@ -381,6 +388,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   // ─── Download / Share ─────────────────────────────────────────────
 
   Future<void> _onDownload(FileInfo file) async {
+    if (_isOwnServerMode) return _openOwnFile(file);
     if (_filesCtrl.isDownloading(file.name)) return;
     String? filePath;
     try {
@@ -400,6 +408,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     } else {
       _showSnackBar('No se pudo descargar "${file.name}"', isError: true);
     }
+  }
+
+  /// Modo servidor propio: el archivo ya está en la carpeta compartida;
+  /// descargarlo crearía una copia (`foto (1).jpg`), así que se abre.
+  Future<void> _openOwnFile(FileInfo file) async {
+    final dir = await const DownloadDirService().getDownloadsDir();
+    final local = resolveInside(dir, file.name);
+    if (local == null || !await local.exists()) {
+      if (mounted) _showSnackBar('"${file.name}" ya no existe', isError: true);
+      return;
+    }
+    await OpenFilex.open(local.path);
   }
 
   Future<void> _onShare(FileInfo file) async {
@@ -621,7 +641,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               else
                                 _buildList(filtered),
                             ],
-                            ..._buildReceivedFilesSlivers(theme),
+                            if (!_isOwnServerMode) ..._buildReceivedFilesSlivers(theme),
                             if (showServerFiles)
                               SliverToBoxAdapter(child: QrFooter(config: _filesCtrl.config)),
                             const SliverToBoxAdapter(child: SizedBox(height: 80)),
@@ -1267,6 +1287,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           return FileListItem(
             file: file,
             onDownload: () => _onDownload(file),
+            downloadIcon: _isOwnServerMode ? Icons.open_in_new_rounded : Icons.download_rounded,
+            downloadTooltip: _isOwnServerMode ? 'Abrir' : 'Descargar',
             onShare: () => _onShare(file),
             onPreview: () => _previewServerFile(context, file),
             onDelete: () => _deleteServerFile(file),
