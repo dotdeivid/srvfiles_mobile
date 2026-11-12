@@ -1,407 +1,264 @@
+import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:srvfiles_mobile/theme/app_theme.dart';
-import 'package:srvfiles_mobile/widgets/gradient_text.dart';
-import 'package:srvfiles_mobile/widgets/glass_card.dart';
-import 'package:srvfiles_mobile/widgets/search_bar.dart';
-import 'package:srvfiles_mobile/widgets/disk_stats_bar.dart';
-import 'package:srvfiles_mobile/widgets/file_list_item.dart';
-import 'package:srvfiles_mobile/widgets/file_grid_item.dart';
-import 'package:srvfiles_mobile/widgets/pulsing_dot.dart';
-import 'package:srvfiles_mobile/widgets/skeleton_loader.dart';
-import 'package:srvfiles_mobile/models/file_info.dart';
-import 'package:srvfiles_mobile/models/disk_stats.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:srvfiles_mobile/features/files/files_controller.dart' show StagedFile;
+import 'package:srvfiles_mobile/models/active_transfer.dart';
+import 'package:srvfiles_mobile/models/app_config.dart';
 import 'package:srvfiles_mobile/models/transfer_client.dart';
+import 'package:srvfiles_mobile/models/transfer_request.dart';
+import 'package:srvfiles_mobile/theme/app_theme.dart';
+import 'package:srvfiles_mobile/widgets/incoming_transfer_dialog.dart';
 import 'package:srvfiles_mobile/widgets/online_clients.dart';
+import 'package:srvfiles_mobile/widgets/pin_entry_dialog.dart';
+import 'package:srvfiles_mobile/widgets/qr_footer.dart';
+import 'package:srvfiles_mobile/widgets/server_mode_warning_dialog.dart';
+import 'package:srvfiles_mobile/widgets/upload_sheet.dart';
 
-/// Helper para envolver widgets en MaterialApp con el tema de SrvFiles.
-Widget wrapWithApp(Widget child) {
-  return MaterialApp(
-    theme: AppTheme.dark,
-    home: Scaffold(body: child),
-  );
-}
+/// Comportamiento de los widgets con lógica propia. Los puramente visuales
+/// (gradientes, skeletons, animaciones) no se prueban.
 
-void main() {
-  group('GradientText', () {
-    testWidgets('renders text', (tester) async {
-      await tester.pumpWidget(wrapWithApp(
-        const GradientText('SrvFiles'),
-      ));
+Widget app(Widget child) =>
+    MaterialApp(theme: AppTheme.dark, home: Scaffold(body: child));
 
-      expect(find.text('SrvFiles'), findsOneWidget);
-    });
-
-    testWidgets('uses ShaderMask', (tester) async {
-      await tester.pumpWidget(wrapWithApp(
-        const GradientText('Test'),
-      ));
-
-      expect(find.byType(ShaderMask), findsOneWidget);
-    });
-  });
-
-  group('GlassCard', () {
-    testWidgets('renders child', (tester) async {
-      await tester.pumpWidget(wrapWithApp(
-        const GlassCard(child: Text('Card content')),
-      ));
-
-      expect(find.text('Card content'), findsOneWidget);
-    });
-
-    testWidgets('uses BackdropFilter', (tester) async {
-      await tester.pumpWidget(wrapWithApp(
-        const GlassCard(child: Text('Test')),
-      ));
-
-      expect(find.byType(BackdropFilter), findsOneWidget);
-    });
-  });
-
-  group('FileSearchBar', () {
-    testWidgets('renders with hint text', (tester) async {
-      final controller = TextEditingController();
-      await tester.pumpWidget(wrapWithApp(
-        FileSearchBar(
-          controller: controller,
-          onChanged: (_) {},
-        ),
-      ));
-
-      expect(find.text('Buscar archivos...'), findsOneWidget);
-      expect(find.byIcon(Icons.search), findsOneWidget);
-    });
-
-    testWidgets('calls onChanged when typing', (tester) async {
-      final controller = TextEditingController();
-      String? lastValue;
-      await tester.pumpWidget(wrapWithApp(
-        FileSearchBar(
-          controller: controller,
-          onChanged: (v) => lastValue = v,
-        ),
-      ));
-
-      await tester.enterText(find.byType(TextField), 'test');
-      expect(lastValue, 'test');
-    });
-  });
-
-  group('DiskStatsBar', () {
-    testWidgets('renders nothing when stats is null', (tester) async {
-      await tester.pumpWidget(wrapWithApp(
-        const DiskStatsBar(stats: null),
-      ));
-
-      expect(find.byType(SizedBox), findsWidgets);
-    });
-
-    testWidgets('renders stats text when provided', (tester) async {
-      const stats = DiskStats(total: 1073741824, used: 536870912, free: 536870912);
-      await tester.pumpWidget(wrapWithApp(
-        const DiskStatsBar(stats: stats),
-      ));
-
-      // Should show "512 MB / 1 GB"
-      expect(find.textContaining('512 MB'), findsOneWidget);
-      expect(find.textContaining('1 GB'), findsOneWidget);
-    });
-  });
-
-  group('FileListItem', () {
-    testWidgets('renders file name and size', (tester) async {
-      const file = FileInfo(
-        name: 'documento.pdf',
-        size: 5242880,
-        createdAt: '2026-03-20T10:00:00Z',
-        downloadUrl: '/api/files/download/documento.pdf',
-      );
-
-      await tester.pumpWidget(wrapWithApp(
-        FileListItem(
-          file: file,
-          onDownload: () {},
-          onShare: () {},
-        ),
-      ));
-
-      expect(find.text('documento.pdf'), findsOneWidget);
-      expect(find.text('5 MB'), findsOneWidget);
-      expect(find.text('📄'), findsOneWidget); // PDF icon
-    });
-
-    testWidgets('calls onDownload when tapped', (tester) async {
-      bool downloadTapped = false;
-      const file = FileInfo(
-        name: 'test.txt',
-        size: 100,
-        createdAt: '2026-03-20T10:00:00Z',
-        downloadUrl: '/test',
-      );
-
-      await tester.pumpWidget(wrapWithApp(
-        FileListItem(
-          file: file,
-          onDownload: () => downloadTapped = true,
-          onShare: () {},
-        ),
-      ));
-
-      await tester.tap(find.byIcon(Icons.download_rounded));
-      expect(downloadTapped, true);
-    });
-
-    testWidgets('calls onShare when tapped', (tester) async {
-      bool shareTapped = false;
-      const file = FileInfo(
-        name: 'test.txt',
-        size: 100,
-        createdAt: '2026-03-20T10:00:00Z',
-        downloadUrl: '/test',
-      );
-
-      await tester.pumpWidget(wrapWithApp(
-        FileListItem(
-          file: file,
-          onDownload: () {},
-          onShare: () => shareTapped = true,
-        ),
-      ));
-
-      await tester.tap(find.byIcon(Icons.share_rounded));
-      expect(shareTapped, true);
-    });
-  });
-
-  group('FileGridItem', () {
-    testWidgets('renders file name, size and icon', (tester) async {
-      const file = FileInfo(
-        name: 'imagen.png',
-        size: 1048576,
-        createdAt: '2026-03-20T10:00:00Z',
-        downloadUrl: '/test',
-      );
-
-      await tester.pumpWidget(wrapWithApp(
-        SizedBox(
-          width: 200,
-          height: 200,
-          child: FileGridItem(
-            file: file,
-            onDownload: () {},
-            onShare: () {},
+/// Abre un diálogo desde un botón y guarda lo que devuelve en [onResult].
+Widget dialogHost<T>(Future<T?> Function(BuildContext) open, void Function(T?) onResult) =>
+    MaterialApp(
+      theme: AppTheme.dark,
+      home: Builder(
+        builder: (ctx) => Scaffold(
+          body: ElevatedButton(
+            onPressed: () async => onResult(await open(ctx)),
+            child: const Text('Abrir'),
           ),
         ),
-      ));
+      ),
+    );
 
-      expect(find.text('imagen.png'), findsOneWidget);
-      expect(find.text('1 MB'), findsOneWidget);
-      expect(find.text('🖼️'), findsOneWidget);
+void main() {
+  group('UploadSheet', () {
+    late Directory dir;
+    setUp(() => dir = Directory.systemTemp.createTempSync('upload_sheet_'));
+    tearDown(() => dir.deleteSync(recursive: true));
+
+    StagedFile staged(String name, int size) =>
+        StagedFile(File('${dir.path}/$name')..writeAsStringSync('x'), name, size);
+
+    Widget sheet(List<StagedFile> files, {int? maxMb, bool uploading = false, VoidCallback? onCancel,
+        void Function(int)? onRemove}) {
+      return app(UploadSheet(
+        files: files,
+        uploading: uploading,
+        uploadProgress: 0.4,
+        maxFileSizeMb: maxMb,
+        onRemove: onRemove ?? (_) {},
+        onClearAll: () {},
+        onUpload: () {},
+        onCancel: onCancel,
+      ));
+    }
+
+    ElevatedButton uploadButton(WidgetTester tester) => tester.widget<ElevatedButton>(
+          find.ancestor(of: find.byIcon(Icons.upload_rounded), matching: find.byType(ElevatedButton)),
+        );
+
+    testWidgets('a file over the limit is flagged and blocks the upload', (tester) async {
+      await tester.pumpWidget(sheet([staged('video.mp4', 2 * 1024 * 1024)], maxMb: 1));
+      expect(find.textContaining('excede el límite'), findsOneWidget);
+      expect(uploadButton(tester).onPressed, isNull);
+    });
+
+    testWidgets('maxFileSizeMb 0 means no limit', (tester) async {
+      await tester.pumpWidget(sheet([staged('video.mp4', 2 * 1024 * 1024)], maxMb: 0));
+      expect(find.textContaining('excede el límite'), findsNothing);
+      expect(uploadButton(tester).onPressed, isNotNull);
+    });
+
+    testWidgets('remove passes the right index', (tester) async {
+      int? removed;
+      await tester.pumpWidget(sheet([staged('a.txt', 1), staged('b.txt', 1)], onRemove: (i) => removed = i));
+      await tester.tap(find.byIcon(Icons.close).last);
+      expect(removed, 1);
+    });
+
+    testWidgets('while uploading: progress and cancel, no editing', (tester) async {
+      var cancelled = false;
+      await tester.pumpWidget(sheet([staged('a.txt', 1)], uploading: true, onCancel: () => cancelled = true));
+      expect(find.text('40%'), findsOneWidget);
+      expect(find.byIcon(Icons.close), findsNothing);
+      expect(find.text('Limpiar'), findsNothing);
+      await tester.tap(find.text('Cancelar'));
+      expect(cancelled, true);
     });
   });
 
-  group('PulsingDot', () {
-    testWidgets('renders and animates', (tester) async {
-      await tester.pumpWidget(wrapWithApp(
-        const PulsingDot(size: 10),
+  group('IncomingTransferDialog', () {
+    const request = IncomingTransferRequest(
+      transferId: 't1', from: 'c1', fromName: 'PC Escritorio',
+      fileName: 'video.mp4', fileSize: 52428800, mimeType: 'video/mp4',
+    );
+
+    ElevatedButton acceptButton(WidgetTester tester) =>
+        tester.widget<ElevatedButton>(find.widgetWithText(ElevatedButton, 'Aceptar'));
+
+    // Aceptar exige confirmar que el código de verificación coincide.
+    testWidgets('shows the verification code and only accepts after confirming it', (tester) async {
+      final results = <bool?>[];
+      await tester.pumpWidget(dialogHost<bool>(
+        (ctx) => IncomingTransferDialog.show(ctx, request, sas: '484688'),
+        results.add,
       ));
+      await tester.tap(find.text('Abrir'));
+      await tester.pumpAndSettle();
+      expect(find.text('PC Escritorio'), findsOneWidget);
+      expect(find.text('484 688'), findsOneWidget);
+      expect(acceptButton(tester).onPressed, isNull);
 
-      expect(find.byType(PulsingDot), findsOneWidget);
+      await tester.tap(find.byType(Checkbox));
+      await tester.pump();
+      await tester.tap(find.text('Aceptar'));
+      await tester.pumpAndSettle();
 
-      // Advance animation
-      await tester.pump(const Duration(milliseconds: 500));
-      await tester.pump(const Duration(milliseconds: 500));
+      await tester.tap(find.text('Abrir'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Rechazar'));
+      await tester.pumpAndSettle();
+
+      expect(results, [true, false]);
+    });
+
+    testWidgets('closes itself with null when the sender cancels', (tester) async {
+      final dismissed = Completer<void>();
+      final results = <bool?>[];
+      await tester.pumpWidget(dialogHost<bool>(
+        (ctx) => IncomingTransferDialog.show(ctx, request, sas: '123456', dismissed: dismissed.future),
+        results.add,
+      ));
+      await tester.tap(find.text('Abrir'));
+      await tester.pumpAndSettle();
+
+      dismissed.complete();
+      await tester.pumpAndSettle();
+
+      expect(find.text('Aceptar'), findsNothing);
+      expect(results, [null]);
     });
   });
 
-  group('SkeletonLoader', () {
-    testWidgets('renders skeleton elements', (tester) async {
-      await tester.pumpWidget(wrapWithApp(
-        const SkeletonLoader(),
+  group('PinEntryDialog', () {
+    testWidgets('validation error keeps it open; success returns the PIN', (tester) async {
+      final attempts = <String>[];
+      String? result;
+      await tester.pumpWidget(dialogHost<String>(
+        (ctx) => PinEntryDialog.show(ctx, onValidate: (pin) async {
+          attempts.add(pin);
+          return pin == '123456' ? null : 'PIN incorrecto';
+        }),
+        (r) => result = r,
       ));
+      await tester.tap(find.text('Abrir'));
+      await tester.pumpAndSettle();
 
-      expect(find.byType(SkeletonLoader), findsOneWidget);
+      await tester.enterText(find.byType(TextField), '123');
+      await tester.tap(find.text('Conectar'));
+      await tester.pumpAndSettle();
+      expect(attempts, isEmpty); // menos de 6 dígitos no se envía
 
-      // Advance animation
-      await tester.pump(const Duration(milliseconds: 500));
+      await tester.enterText(find.byType(TextField), '000000');
+      await tester.pump();
+      await tester.tap(find.text('Conectar'));
+      await tester.pumpAndSettle();
+      expect(find.text('PIN incorrecto'), findsOneWidget);
+
+      await tester.enterText(find.byType(TextField), '123456');
+      await tester.pump();
+      await tester.tap(find.text('Conectar'));
+      await tester.pumpAndSettle();
+      expect(result, '123456');
+      expect(attempts, ['000000', '123456']);
+    });
+  });
+
+  testWidgets('ServerModeWarningDialog remembers "no volver a mostrar"', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    bool? result;
+    await tester.pumpWidget(dialogHost<bool>(
+      (ctx) => showDialog<bool>(context: ctx, builder: (_) => const ServerModeWarningDialog()),
+      (r) => result = r,
+    ));
+    await tester.tap(find.text('Abrir'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('No volver a mostrar este aviso'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Encender'));
+    await tester.pumpAndSettle();
+
+    expect(result, true);
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getBool('server_mode_warning_dismissed'), true);
+  });
+
+  group('QrFooter', () {
+    AppConfig config(String ip) => AppConfig(
+          appName: 'SrvFiles', lanIp: ip, port: 3001, frontendPort: 5173,
+          maxFileSizeMb: 0, lanUrl: '',
+        );
+
+    testWidgets('encodes the frontend port', (tester) async {
+      await tester.pumpWidget(app(SingleChildScrollView(child: QrFooter(config: config('192.168.1.50')))));
+      expect(find.text('http://192.168.1.50:5173'), findsOneWidget);
+    });
+
+    testWidgets('is hidden without a LAN IP', (tester) async {
+      await tester.pumpWidget(app(QrFooter(config: config(''))));
+      expect(find.text('Accedé desde otro dispositivo'), findsNothing);
     });
   });
 
   group('OnlineClients', () {
-    testWidgets('shows nothing when no other clients', (tester) async {
-      await tester.pumpWidget(wrapWithApp(
-        OnlineClients(
-          clients: const [
-            TransferClient(
-              clientId: 'me',
-              appName: 'Mi Celular',
-              receiving: true,
-              ip: '192.168.1.10',
-            ),
-          ],
-          myClientId: 'me',
-          activeTransfer: null,
-          onSendFile: (a, b) {},
-          onCancelTransfer: () {},
-        ),
-      ));
+    const me = TransferClient(clientId: 'me', appName: 'Yo', receiving: true, ip: '1');
+    const peer = TransferClient(clientId: 'p1', appName: 'Laptop', receiving: true, ip: '2', e2e: true);
 
-      // Should render SizedBox.shrink (nothing visible)
+    testWidgets('hides itself when I am the only client', (tester) async {
+      await tester.pumpWidget(app(OnlineClients(
+        clients: const [me], myClientId: 'me', activeTransfer: null,
+        onSendFile: (_, _) {}, onCancelTransfer: () {},
+      )));
       expect(find.text('Dispositivos conectados'), findsNothing);
     });
 
-    testWidgets('shows desktop icon for desktop client', (tester) async {
-      await tester.pumpWidget(wrapWithApp(
-        OnlineClients(
-          clients: const [
-            TransferClient(
-              clientId: 'me',
-              appName: 'Mi Celular',
-              receiving: true,
-              ip: '192.168.1.10',
-              deviceType: 'mobile',
-            ),
-            TransferClient(
-              clientId: 'other',
-              appName: 'MacBook Air',
-              receiving: true,
-              ip: '192.168.1.20',
-              deviceType: 'desktop',
-            ),
-          ],
-          myClientId: 'me',
-          activeTransfer: null,
-          onSendFile: (a, b) {},
-          onCancelTransfer: () {},
+    testWidgets('send targets the peer; an active transfer offers cancel', (tester) async {
+      String? target;
+      var cancelled = false;
+      await tester.pumpWidget(app(OnlineClients(
+        clients: const [me, peer], myClientId: 'me', activeTransfer: null,
+        onSendFile: (id, _) => target = id, onCancelTransfer: () => cancelled = true,
+      )));
+      await tester.tap(find.text('Enviar'));
+      expect(target, 'p1');
+
+      // Un cliente sin cifrado de extremo a extremo no puede recibir.
+      target = null;
+      await tester.pumpWidget(app(OnlineClients(
+        clients: const [me, TransferClient(clientId: 'old', appName: 'Viejo', receiving: true, ip: '3')],
+        myClientId: 'me', activeTransfer: null,
+        onSendFile: (id, _) => target = id, onCancelTransfer: () {},
+      )));
+      await tester.tap(find.text('Enviar'));
+      expect(target, isNull);
+
+      await tester.pumpWidget(app(OnlineClients(
+        clients: const [me, peer], myClientId: 'me',
+        activeTransfer: const ActiveTransfer(
+          transferId: 't', fileName: 'a.bin', fileSize: 10, progress: 30,
+          direction: TransferDirection.sending, peerName: 'Laptop', peerId: 'p1', waiting: false,
         ),
-      ));
-
-      expect(find.text('MacBook Air'), findsOneWidget);
-      expect(find.byIcon(Icons.language), findsOneWidget);
-    });
-
-    testWidgets('shows mobile icon for mobile client', (tester) async {
-      await tester.pumpWidget(wrapWithApp(
-        OnlineClients(
-          clients: const [
-            TransferClient(
-              clientId: 'me',
-              appName: 'PC',
-              receiving: true,
-              ip: '192.168.1.10',
-            ),
-            TransferClient(
-              clientId: 'other',
-              appName: 'Galaxy S23',
-              receiving: true,
-              ip: '192.168.1.30',
-              deviceType: 'mobile',
-            ),
-          ],
-          myClientId: 'me',
-          activeTransfer: null,
-          onSendFile: (a, b) {},
-          onCancelTransfer: () {},
-        ),
-      ));
-
-      expect(find.text('Galaxy S23'), findsOneWidget);
-      expect(find.byIcon(Icons.phone_android), findsOneWidget);
-    });
-
-    testWidgets('shows multiple peers with correct icons', (tester) async {
-      await tester.pumpWidget(wrapWithApp(
-        OnlineClients(
-          clients: const [
-            TransferClient(
-              clientId: 'me',
-              appName: 'Me',
-              receiving: true,
-              ip: '192.168.1.1',
-            ),
-            TransferClient(
-              clientId: 'pc1',
-              appName: 'Desktop',
-              receiving: true,
-              ip: '192.168.1.2',
-              deviceType: 'desktop',
-            ),
-            TransferClient(
-              clientId: 'phone1',
-              appName: 'Phone',
-              receiving: true,
-              ip: '192.168.1.3',
-              deviceType: 'mobile',
-            ),
-          ],
-          myClientId: 'me',
-          activeTransfer: null,
-          onSendFile: (a, b) {},
-          onCancelTransfer: () {},
-        ),
-      ));
-
-      expect(find.text('Desktop'), findsOneWidget);
-      expect(find.text('Phone'), findsOneWidget);
-      expect(find.byIcon(Icons.language), findsOneWidget);
-      expect(find.byIcon(Icons.phone_android), findsOneWidget);
-    });
-  });
-
-  group('FileListItem with onDelete', () {
-    testWidgets('shows delete option in context menu', (tester) async {
-      bool deleteCalled = false;
-      const file = FileInfo(
-        name: 'received.pdf',
-        size: 1024,
-        createdAt: '2026-03-20T10:00:00Z',
-        downloadUrl: '/test/received.pdf',
-      );
-
-      await tester.pumpWidget(wrapWithApp(
-        FileListItem(
-          file: file,
-          onDownload: () {},
-          onShare: () {},
-          onDelete: () => deleteCalled = true,
-        ),
-      ));
-
-      // Long-press to open context menu
-      await tester.longPress(find.text('received.pdf'));
-      await tester.pumpAndSettle();
-
-      expect(find.text('Eliminar'), findsOneWidget);
-
-      // Tap delete
-      await tester.tap(find.text('Eliminar'));
-      await tester.pumpAndSettle();
-
-      expect(deleteCalled, true);
-    });
-
-    testWidgets('does not show delete option when onDelete is null', (tester) async {
-      const file = FileInfo(
-        name: 'server_file.pdf',
-        size: 1024,
-        createdAt: '2026-03-20T10:00:00Z',
-        downloadUrl: '/test/server_file.pdf',
-      );
-
-      await tester.pumpWidget(wrapWithApp(
-        FileListItem(
-          file: file,
-          onDownload: () {},
-          onShare: () {},
-        ),
-      ));
-
-      // Long-press to open context menu
-      await tester.longPress(find.text('server_file.pdf'));
-      await tester.pumpAndSettle();
-
-      expect(find.text('Eliminar'), findsNothing);
+        onSendFile: (_, _) {}, onCancelTransfer: () => cancelled = true,
+      )));
+      expect(find.text('30%'), findsOneWidget);
+      await tester.tap(find.byTooltip('Cancelar transferencia'));
+      expect(cancelled, true);
     });
   });
 }

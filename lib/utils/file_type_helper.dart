@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+
 /// Classifies a file by its extension into a [FileCategory].
 enum FileCategory { image, svg, video, audio, pdf, text, unknown }
 
@@ -18,9 +20,15 @@ class FileTypeHelper {
     ],
   };
 
+  /// Formatos que AVFoundation (iOS) no reproduce de forma fiable.
+  static const _unsupportedOnIos = {'webm', 'ogg', 'opus', 'flac'};
+
   /// Returns the [FileCategory] for [fileName].
   static FileCategory categorize(String fileName) {
     final ext = _ext(fileName);
+    if (Platform.isIOS && _unsupportedOnIos.contains(ext)) {
+      return FileCategory.unknown;
+    }
     for (final entry in _extensions.entries) {
       if (entry.value.contains(ext)) return entry.key;
     }

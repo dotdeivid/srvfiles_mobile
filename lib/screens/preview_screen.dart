@@ -1,7 +1,8 @@
+import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:photo_view/photo_view.dart' show PhotoView, PhotoViewComputedScale;
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:video_player/video_player.dart';
 import 'package:chewie/chewie.dart';
@@ -12,7 +13,8 @@ import '../theme/app_colors.dart';
 import '../utils/file_type_helper.dart';
 
 /// Full-screen file preview.
-/// Deletes [filePath] on dispose when [isTempFile] is true.
+/// Deletes [filePath] on dispose when [isTempFile] is true. Los temporales de
+/// archivos del servidor los gestiona PreviewService (caché), no esta pantalla.
 class PreviewScreen extends StatefulWidget {
   const PreviewScreen({
     super.key,
@@ -63,14 +65,6 @@ class _PreviewScreenState extends State<PreviewScreen> {
       body: SafeArea(
         child: _buildContent(category),
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => Navigator.of(context).pop(),
-        icon: const Icon(Icons.arrow_back_rounded),
-        label: const Text('Volver'),
-        backgroundColor: AppColors.accentPrimary,
-        foregroundColor: Colors.white,
-      ),
-      floatingActionButtonLocation: FloatingActionButtonLocation.startFloat,
     );
   }
 
@@ -102,8 +96,13 @@ class _ImagePreview extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Decodificar a ~2× la resolución de pantalla en lugar del tamaño
+    // original (una foto de 48 MP ocupa ~190 MB decodificada).
+    final media = MediaQuery.of(context);
+    final targetWidth = (media.size.width * media.devicePixelRatio * 2).round();
     return PhotoView(
-      imageProvider: FileImage(File(filePath)),
+      imageProvider: ResizeImage.resizeIfNeeded(targetWidth, null, FileImage(File(filePath))),
+      errorBuilder: (_, _, _) => const _PreviewError('No se pudo abrir la imagen.'),
       backgroundDecoration: const BoxDecoration(color: Colors.black),
       minScale: PhotoViewComputedScale.contained,
       maxScale: PhotoViewComputedScale.covered * 4,
@@ -141,6 +140,7 @@ class _VideoPreview extends StatefulWidget {
 class _VideoPreviewState extends State<_VideoPreview> {
   late VideoPlayerController _controller;
   ChewieController? _chewie;
+  bool _error = false;
 
   @override
   void initState() {
@@ -155,6 +155,8 @@ class _VideoPreviewState extends State<_VideoPreview> {
           looping: false,
         );
       });
+    }).catchError((Object _) {
+      if (mounted) setState(() => _error = true);
     });
   }
 
@@ -167,6 +169,12 @@ class _VideoPreviewState extends State<_VideoPreview> {
 
   @override
   Widget build(BuildContext context) {
+    if (_error) {
+      return _PreviewError(
+        'No se pudo reproducir este video en el dispositivo.',
+        filePath: widget.filePath,
+      );
+    }
     if (_chewie == null) {
       return const Center(child: CircularProgressIndicator());
     }
@@ -190,25 +198,38 @@ class _AudioPreviewState extends State<_AudioPreview> {
   PlayerState _state = PlayerState.stopped;
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
+  bool _error = false;
+  final List<StreamSubscription<Object?>> _subs = [];
 
   @override
   void initState() {
     super.initState();
-    _player.onPlayerStateChanged.listen((s) {
+    _subs.add(_player.onPlayerStateChanged.listen((s) {
       if (mounted) setState(() => _state = s);
-    });
-    _player.onPositionChanged.listen((p) {
+    }));
+    _subs.add(_player.onPositionChanged.listen((p) {
       if (mounted) setState(() => _position = p);
-    });
-    _player.onDurationChanged.listen((d) {
+    }));
+    _subs.add(_player.onDurationChanged.listen((d) {
       if (mounted) setState(() => _duration = d);
-    });
+    }));
   }
 
   @override
   void dispose() {
+    for (final s in _subs) {
+      s.cancel();
+    }
     _player.dispose();
     super.dispose();
+  }
+
+  Future<void> _play() async {
+    try {
+      await _player.play(DeviceFileSource(widget.filePath));
+    } catch (_) {
+      if (mounted) setState(() => _error = true);
+    }
   }
 
   String _fmt(Duration d) {
@@ -219,6 +240,12 @@ class _AudioPreviewState extends State<_AudioPreview> {
 
   @override
   Widget build(BuildContext context) {
+    if (_error) {
+      return _PreviewError(
+        'No se pudo reproducir este audio en el dispositivo.',
+        filePath: widget.filePath,
+      );
+    }
     final playing = _state == PlayerState.playing;
     return Center(
       child: Padding(
@@ -254,13 +281,14 @@ class _AudioPreviewState extends State<_AudioPreview> {
             const SizedBox(height: AppSpacing.md),
             IconButton(
               iconSize: 56,
+              tooltip: playing ? 'Pausar' : 'Reproducir',
               color: AppColors.accentPrimary,
               icon: Icon(playing ? Icons.pause_circle_filled_rounded : Icons.play_circle_filled_rounded),
               onPressed: () {
                 if (playing) {
                   _player.pause();
                 } else {
-                  _player.play(DeviceFileSource(widget.filePath));
+                  _play();
                 }
               },
             ),
@@ -287,9 +315,9 @@ class _PdfPreviewState extends State<_PdfPreview> {
   @override
   void initState() {
     super.initState();
-    _controller = PdfController(
-      document: PdfDocument.openFile(widget.filePath),
-    );
+    // PdfController espera el Future dentro de un try/catch; el error se
+    // muestra con el errorBuilder de PdfView.
+    _controller = PdfController(document: PdfDocument.openFile(widget.filePath));
   }
 
   @override
@@ -303,6 +331,13 @@ class _PdfPreviewState extends State<_PdfPreview> {
     return PdfView(
       controller: _controller,
       scrollDirection: Axis.vertical,
+      builders: PdfViewBuilders<DefaultBuilderOptions>(
+        options: const DefaultBuilderOptions(),
+        errorBuilder: (_, _) => _PreviewError(
+          'No se pudo abrir el PDF.',
+          filePath: widget.filePath,
+        ),
+      ),
     );
   }
 }
@@ -318,17 +353,41 @@ class _TextPreview extends StatefulWidget {
 }
 
 class _TextPreviewState extends State<_TextPreview> {
+  /// Se muestran como mucho los primeros 256 KB: un único Text con decenas de
+  /// MB congela la UI.
+  static const _maxBytes = 256 * 1024;
+
   String? _content;
+  bool _truncated = false;
   bool _error = false;
 
   @override
   void initState() {
     super.initState();
-    File(widget.filePath).readAsString().then((text) {
-      if (mounted) setState(() => _content = text);
-    }).catchError((_) {
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final file = File(widget.filePath);
+      final length = await file.length();
+      final raf = await file.open();
+      List<int> bytes;
+      try {
+        bytes = await raf.read(_maxBytes);
+      } finally {
+        await raf.close();
+      }
+      final text = utf8.decode(bytes, allowMalformed: true);
+      if (mounted) {
+        setState(() {
+          _content = text;
+          _truncated = length > _maxBytes;
+        });
+      }
+    } catch (_) {
       if (mounted) setState(() => _error = true);
-    });
+    }
   }
 
   @override
@@ -345,14 +404,37 @@ class _TextPreviewState extends State<_TextPreview> {
     return Scrollbar(
       child: SingleChildScrollView(
         padding: const EdgeInsets.all(AppSpacing.md),
-        child: Text(
-          _content!,
-          style: const TextStyle(
-            fontFamily: 'monospace',
-            fontSize: 13,
-            color: AppColors.textPrimary,
-            height: 1.5,
-          ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (_truncated)
+              Padding(
+                padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+                child: Row(
+                  children: [
+                    const Expanded(
+                      child: Text(
+                        'Vista parcial: se muestran los primeros 256 KB.',
+                        style: TextStyle(color: AppColors.textMuted, fontSize: 12),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: () => OpenFilex.open(widget.filePath),
+                      child: const Text('Abrir completo'),
+                    ),
+                  ],
+                ),
+              ),
+            SelectableText(
+              _content!,
+              style: const TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 13,
+                color: AppColors.textPrimary,
+                height: 1.5,
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -391,6 +473,43 @@ class _UnknownPreview extends StatelessWidget {
               label: const Text('Abrir con…'),
               onPressed: () => OpenFilex.open(filePath),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Error ────────────────────────────────────────────────────────────
+
+class _PreviewError extends StatelessWidget {
+  const _PreviewError(this.message, {this.filePath});
+  final String message;
+  final String? filePath;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(AppSpacing.xl),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.error_outline_rounded, color: AppColors.textMuted, size: 48),
+            const SizedBox(height: AppSpacing.md),
+            Text(
+              message,
+              style: const TextStyle(color: AppColors.textSecondary),
+              textAlign: TextAlign.center,
+            ),
+            if (filePath != null) ...[
+              const SizedBox(height: AppSpacing.lg),
+              OutlinedButton.icon(
+                icon: const Icon(Icons.open_in_new_rounded),
+                label: const Text('Abrir con otra app'),
+                onPressed: () => OpenFilex.open(filePath!),
+              ),
+            ],
           ],
         ),
       ),

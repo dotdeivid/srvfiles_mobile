@@ -173,11 +173,15 @@ class FileListItem extends StatelessWidget {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      formatBytes(file.size),
+                      [
+                        formatBytes(file.size),
+                        if (formatDate(file.createdAt).isNotEmpty) formatDate(file.createdAt),
+                      ].join(' · '),
                       style: const TextStyle(
                         fontSize: 12,
                         color: AppColors.textMuted,
                       ),
+                      overflow: TextOverflow.ellipsis,
                     ),
                   ],
                 ),

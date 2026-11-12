@@ -16,6 +16,9 @@ class ConnectedClient {
   /// Session cipher — null if the client did not perform key exchange.
   SessionCipher? cipher;
 
+  /// Soporta cifrado de extremo a extremo (anunciado en hello con e2e: 1).
+  bool e2e;
+
   ConnectedClient({
     required this.ws,
     required this.clientId,
@@ -25,6 +28,7 @@ class ConnectedClient {
     required this.deviceType,
     this.isOwner = false,
     this.cipher,
+    this.e2e = false,
   });
 }
 
@@ -37,7 +41,13 @@ class TransferSession {
   final int fileSize;
   final String mimeType;
 
-  const TransferSession({
+  /// true cuando el receptor aceptó; antes de eso no se reenvían chunks.
+  bool accepted = false;
+
+  /// true cuando el receptor ya mandó su clave pública E2E.
+  bool keySent = false;
+
+  TransferSession({
     required this.transferId,
     required this.senderClientId,
     required this.receiverClientId,

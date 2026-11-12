@@ -1,58 +1,46 @@
-import 'dart:convert';
 import 'dart:math';
-import 'package:crypto/crypto.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'app_logger.dart';
 
 /// Gestiona el PIN de seguridad del modo servidor.
 /// El PIN siempre es obligatorio — se genera automáticamente al encender el servidor.
+///
+/// Vive solo en memoria: guardar el hash de un PIN de 6 dígitos no protege
+/// nada (son un millón de combinaciones) y el PIN deja de valer al apagar el
+/// servidor.
 class PinService {
-  static const _hashKey = 'security_pin_hash';
+  String? _pin;
 
-  /// Genera un PIN numérico de 6 dígitos, guarda su SHA-256 en SharedPreferences
-  /// y retorna el PIN en texto plano (para mostrarlo en la UI una sola vez).
-  Future<String> generatePin() async {
-    try {
-      final rng = Random.secure();
-      final pin = (rng.nextInt(900000) + 100000).toString(); // 100000–999999
-      final hash = sha256.convert(utf8.encode(pin)).toString();
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(_hashKey, hash);
-      AppLogger.instance.info('[PinService] PIN generated and stored');
-      return pin;
-    } catch (e) {
-      AppLogger.instance.error('[PinService] generatePin failed', error: e);
-      rethrow;
-    }
+  /// PIN actual, o null si el modo servidor está apagado.
+  String? get currentPin => _pin;
+
+  /// Genera un PIN numérico de 6 dígitos y lo devuelve.
+  String generatePin() {
+    final rng = Random.secure();
+    _pin = (rng.nextInt(900000) + 100000).toString(); // 100000–999999
+    AppLogger.instance.info('[PinService] PIN generated');
+    return _pin!;
   }
 
-  /// Verifica si el PIN ingresado es correcto comparando su SHA-256 con el almacenado.
-  Future<bool> validatePin(String input) async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final stored = prefs.getString(_hashKey);
-      if (stored == null) {
-        AppLogger.instance.warn('[PinService] validatePin: no PIN hash stored');
-        return false;
-      }
-      final inputHash = sha256.convert(utf8.encode(input)).toString();
-      final valid = inputHash == stored;
-      if (!valid) AppLogger.instance.warn('[PinService] validatePin: wrong PIN submitted');
-      return valid;
-    } catch (e) {
-      AppLogger.instance.error('[PinService] validatePin failed', error: e);
+  /// Verifica si el PIN ingresado es correcto (comparación en tiempo constante).
+  bool validatePin(String input) {
+    final pin = _pin;
+    if (pin == null) {
+      AppLogger.instance.warn('[PinService] validatePin: no PIN active');
       return false;
     }
+    var diff = input.length ^ pin.length;
+    for (var i = 0; i < pin.length; i++) {
+      final c = i < input.length ? input.codeUnitAt(i) : 0;
+      diff |= c ^ pin.codeUnitAt(i);
+    }
+    final valid = diff == 0;
+    if (!valid) AppLogger.instance.warn('[PinService] validatePin: wrong PIN submitted');
+    return valid;
   }
 
-  /// Elimina el hash del PIN de SharedPreferences al apagar el servidor.
-  Future<void> clearPin() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.remove(_hashKey);
-      AppLogger.instance.info('[PinService] PIN cleared');
-    } catch (e) {
-      AppLogger.instance.error('[PinService] clearPin failed', error: e);
-    }
+  /// Invalida el PIN al apagar el servidor.
+  void clearPin() {
+    _pin = null;
+    AppLogger.instance.info('[PinService] PIN cleared');
   }
 }

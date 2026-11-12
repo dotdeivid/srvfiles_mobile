@@ -1,23 +1,42 @@
-import 'dart:typed_data';
+import '../../services/e2e_service.dart';
+import '../../services/received_files_service.dart';
+import '../../services/transfer_service.dart';
 
-/// Buffer that accumulates incoming binary chunks during a P2P file transfer.
+/// Estado de una recepción P2P en curso.
 ///
-/// Created when this device accepts an incoming transfer request. Each binary
-/// chunk from the sender is appended to [chunks] and [received] is incremented
-/// by the chunk size. When `received >= total` the transfer is complete and the
-/// caller assembles the final file from [chunks].
+/// Cada chunk se descifra con su índice ([session]) y se escribe directo a
+/// disco ([sink], un archivo `.part`). Las operaciones se encadenan en [work]
+/// para conservar el orden. Al llegar `send-complete` se verifica el marcador
+/// final cifrado (cantidad de chunks, tamaño y nombre).
 class ReceiveBuffer {
-  final List<Uint8List> chunks;
+  final ReceivedFileSink sink;
+
+  /// Conexión por la que llega la transferencia (principal o del pool).
+  final TransferService service;
+  final E2ESession session;
+
+  /// Índice del próximo chunk esperado (= chunks recibidos).
+  int nextIndex = 0;
   int received;
   final int total;
   final String fileName;
   final String mimeType;
+  final String peerName;
+
+  /// Cadena de descifrado + escritura (en orden de llegada).
+  Future<void> work = Future.value();
+
+  /// Motivo de fallo, si lo hubo.
+  String? failed;
 
   ReceiveBuffer({
-    required this.chunks,
-    required this.received,
+    required this.sink,
+    required this.service,
+    required this.session,
     required this.total,
     required this.fileName,
     required this.mimeType,
+    required this.peerName,
+    this.received = 0,
   });
 }

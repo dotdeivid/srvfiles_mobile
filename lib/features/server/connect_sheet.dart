@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../../config/api_config.dart';
 import '../../services/discovery_service.dart';
 import '../../theme/app_colors.dart';
+import '../../utils/server_url.dart';
 
 /// Bottom sheet that lets the user view the current server info, scan for
 /// other SrvFiles servers on the LAN, or connect to one manually by IP.
@@ -13,10 +15,11 @@ class ConnectSheet extends StatefulWidget {
     this.currentServerUrl,
     this.webUrl,
     this.relayIp,
-    this.relayPort = 3001,
+    this.relayPort = defaultServerPort,
     this.relayPin,
     this.isRelayServer = false,
     this.isRelayRunning = false,
+    this.onShareLogs,
   });
 
   final void Function(String url) onConnect;
@@ -29,6 +32,9 @@ class ConnectSheet extends StatefulWidget {
   final bool isRelayServer;
   final bool isRelayRunning;
 
+  /// Comparte el archivo de registros de errores (para soporte).
+  final VoidCallback? onShareLogs;
+
   @override
   State<ConnectSheet> createState() => _ConnectSheetState();
 }
@@ -38,6 +44,8 @@ class _ConnectSheetState extends State<ConnectSheet> {
   final _ipController = TextEditingController();
 
   bool _scanning = true;
+  bool _connecting = false;
+  String? _manualError;
   List<DiscoveredServer> _servers = [];
 
   @override
@@ -61,7 +69,7 @@ class _ConnectSheetState extends State<ConnectSheet> {
       _scanning = true;
       _servers = [];
     });
-    final results = await _discovery.scanLan();
+    final results = await _discovery.scanLan(isCancelled: () => !mounted);
     if (mounted) {
       setState(() {
         _servers = results;
@@ -75,13 +83,28 @@ class _ConnectSheetState extends State<ConnectSheet> {
     widget.onConnect(url);
   }
 
-  void _connectManual() {
-    final input = _ipController.text.trim();
-    if (input.isEmpty) return;
-    String url = input;
-    if (!url.startsWith('http')) url = 'http://$url';
-    if (!RegExp(r':\d+$').hasMatch(url)) url = '$url:3001';
-    _connectTo(url);
+  /// Valida la dirección y comprueba que sea un servidor SrvFiles antes de
+  /// cambiar de pantalla.
+  Future<void> _connectManual() async {
+    final url = normalizeServerUrl(_ipController.text);
+    if (url == null) {
+      setState(() => _manualError = 'Dirección inválida. Ejemplo: 192.168.1.20:$defaultServerPort');
+      return;
+    }
+    setState(() {
+      _connecting = true;
+      _manualError = null;
+    });
+    final ok = await _discovery.tryConnect(url);
+    if (!mounted) return;
+    if (ok) {
+      _connectTo(url);
+    } else {
+      setState(() {
+        _connecting = false;
+        _manualError = 'No se encontró un servidor SrvFiles en $url';
+      });
+    }
   }
 
   // ─── URL row with copy button ─────────────────────────────────────
@@ -114,8 +137,9 @@ class _ConnectSheetState extends State<ConnectSheet> {
             ),
           ),
         ),
-        GestureDetector(
-          onTap: () {
+        IconButton(
+          tooltip: 'Copiar $label',
+          onPressed: () {
             Clipboard.setData(ClipboardData(text: address));
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
@@ -124,15 +148,9 @@ class _ConnectSheetState extends State<ConnectSheet> {
               ),
             );
           },
-          child: Container(
-            padding: const EdgeInsets.all(4),
-            decoration: BoxDecoration(
-              color: AppColors.accentPrimary.withValues(alpha: 0.08),
-              borderRadius: BorderRadius.circular(4),
-            ),
-            child: Icon(Icons.copy_rounded,
-                color: AppColors.textMuted.withValues(alpha: 0.7), size: 14),
-          ),
+          icon: Icon(Icons.copy_rounded,
+              color: AppColors.textMuted.withValues(alpha: 0.7), size: 16),
+          visualDensity: VisualDensity.compact,
         ),
       ],
     );
@@ -252,7 +270,7 @@ class _ConnectSheetState extends State<ConnectSheet> {
     final theme = Theme.of(context);
     final isLocalServer = widget.isRelayServer && widget.currentServerUrl == null;
     final otherServers = _servers
-        .where((s) => s.url != widget.currentServerUrl)
+        .where((s) => s.servesFiles && s.url != widget.currentServerUrl)
         .toList();
 
     return Container(
@@ -369,8 +387,8 @@ class _ConnectSheetState extends State<ConnectSheet> {
                       color: AppColors.accentPrimary.withValues(alpha: 0.12),
                       borderRadius: BorderRadius.circular(8),
                     ),
-                    child: const Icon(
-                      Icons.computer_rounded,
+                    child: Icon(
+                      server.isMobile ? Icons.phone_android_rounded : Icons.computer_rounded,
                       color: AppColors.accentPrimary,
                       size: 18,
                     ),
@@ -411,16 +429,24 @@ class _ConnectSheetState extends State<ConnectSheet> {
                       keyboardType: TextInputType.url,
                       textInputAction: TextInputAction.go,
                       onSubmitted: (_) => _connectManual(),
-                      decoration: const InputDecoration(
-                        hintText: '192.168.1.x:3001',
-                        prefixIcon: Icon(Icons.lan_rounded, color: AppColors.textMuted),
+                      decoration: InputDecoration(
+                        hintText: '192.168.1.x:$defaultServerPort',
+                        prefixIcon: const Icon(Icons.lan_rounded, color: AppColors.textMuted),
+                        errorText: _manualError,
+                        errorMaxLines: 2,
                       ),
                     ),
                   ),
                   const SizedBox(width: AppSpacing.sm),
                   ElevatedButton(
-                    onPressed: _connectManual,
-                    child: const Text('Conectar'),
+                    onPressed: _connecting ? null : _connectManual,
+                    child: _connecting
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Text('Conectar'),
                   ),
                 ],
               ),
@@ -437,6 +463,19 @@ class _ConnectSheetState extends State<ConnectSheet> {
                 ),
               ),
           ],
+
+          if (widget.onShareLogs != null)
+            Center(
+              child: TextButton.icon(
+                onPressed: () {
+                  Navigator.of(context).pop();
+                  widget.onShareLogs!();
+                },
+                icon: const Icon(Icons.bug_report_outlined, size: 16),
+                label: const Text('Compartir registros de errores', style: TextStyle(fontSize: 13)),
+                style: TextButton.styleFrom(foregroundColor: AppColors.textMuted),
+              ),
+            ),
 
           // Disconnect → back to splash
           Center(

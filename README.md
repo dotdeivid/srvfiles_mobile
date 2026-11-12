@@ -1,5 +1,7 @@
 # SrvFiles Mobile
 
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+
 App Android para el ecosistema [SrvFiles](https://github.com/dotdeivid/srvfiles) — transferencia de archivos en red local sin internet, sin cuenta, sin configuración.
 
 ## Modos de operación
@@ -14,8 +16,8 @@ App Android para el ecosistema [SrvFiles](https://github.com/dotdeivid/srvfiles)
 - Explorar, subir, descargar y eliminar archivos del servidor
 - **Previsualización de archivos** — botón "ver" en lista y grilla; imágenes, video, audio, PDF y texto se abren en pantalla completa sin descargar permanentemente (ver tabla abajo)
 - Transferencia P2P directa entre dispositivos (sin pasar por disco)
-- **Cifrado E2E en P2P** — ECDH P-256 + AES-256-GCM; cada sesión usa clave efímera
-- Archivos recibidos guardados en `Download/SrvFiles/received/`
+- **Cifrado de extremo a extremo obligatorio** — cada transferencia negocia su propia clave (ECDH P-256 + AES-256-GCM) entre emisor y receptor; el relay o servidor solo reenvía y no puede leer el archivo. Ambos ven un código de 6 dígitos y el receptor confirma que coincide antes de aceptar. Además, el canal con el servidor va cifrado (candado en el encabezado). Protocolo: `docs/protocol.md` de srvfiles_web
+- Archivos recibidos guardados en `Download/SrvFiles/received/` (si Android no permite escribir ahí, en el almacenamiento propio de la app; en iOS, en la app Archivos)
 - Descubrimiento automático de servidores en la red local al abrir la app
 - Autenticación PIN al conectarse a servidores protegidos
 - ConnectSheet: info del servidor activo (IP, PIN, estado) accesible desde el header
@@ -108,3 +110,7 @@ Genera el APK y lo publica en GitHub Releases como `SrvFiles-vX.Y.Z.apk`.
 - El PIN se genera automáticamente en cada sesión de servidor y se muestra en el ConnectSheet.
 - La firma de release por defecto es la de debug de Flutter (válida para sideloading). Para Google Play se necesita configurar un keystore.
 - El espacio en disco se obtiene vía `StatFs` nativo (MethodChannel), sin dependencias externas.
+
+## Licencia
+
+Distribuido bajo la licencia [Apache 2.0](LICENSE). © 2026 dotdeivid.

@@ -1,92 +1,103 @@
 import 'dart:io';
-import 'package:path_provider/path_provider.dart';
+import 'package:path/path.dart' as p;
 import '../models/file_info.dart';
+import '../utils/file_names.dart';
+import 'download_dir_service.dart';
+import 'mobile_server_storage_service.dart' show listFilesIn;
 
 /// Gestiona el directorio local de archivos recibidos por P2P.
-/// En Android: Download/SrvFiles/received/ (público, visible para galería/archivos).
+/// En Android: Download/SrvFiles/received/ (público, visible para galería/archivos),
+/// con almacenamiento propio de la app como alternativa.
 /// En otros: Documents/SrvFiles/received/.
 class ReceivedFilesService {
   Directory? _dir;
+  final DownloadDirService _dirs;
 
   /// Constructor opcional para inyectar directorio en tests.
-  ReceivedFilesService([this._dir]);
+  ReceivedFilesService([this._dir]) : _dirs = const DownloadDirService();
 
   /// Obtiene (y crea si no existe) el directorio de archivos recibidos.
   Future<Directory> getDirectory() async {
-    if (_dir != null) return _dir!;
-    Directory baseDir;
-    if (Platform.isAndroid) {
-      final publicDownloads = Directory('/storage/emulated/0/Download');
-      baseDir = await publicDownloads.exists()
-          ? publicDownloads
-          : await getApplicationDocumentsDirectory();
-    } else {
-      baseDir = await getApplicationDocumentsDirectory();
+    if (_dir != null) {
+      if (!await _dir!.exists()) await _dir!.create(recursive: true);
+      return _dir!;
     }
-    final dir = Directory('${baseDir.path}/SrvFiles/received');
-    if (!await dir.exists()) {
-      await dir.create(recursive: true);
-    }
-    _dir = dir;
-    return dir;
+    _dir = await _dirs.getReceivedDir();
+    return _dir!;
   }
 
   /// Escanea el directorio y retorna la lista de archivos ordenados por fecha
-  /// (más reciente primero).
+  /// (más reciente primero). `downloadUrl` es la ruta local del archivo.
   Future<List<FileInfo>> listFiles() async {
     final dir = await getDirectory();
-    if (!await dir.exists()) return [];
-
-    final entities = dir.listSync().whereType<File>().toList();
-
-    // Ordenar por fecha de modificación descendente
-    entities.sort((a, b) {
-      final aStat = a.statSync();
-      final bStat = b.statSync();
-      return bStat.modified.compareTo(aStat.modified);
-    });
-
-    return entities.map((file) {
-      final stat = file.statSync();
-      final name = file.path.split('/').last;
-      return FileInfo(
-        name: name,
-        size: stat.size,
-        createdAt: stat.modified.toIso8601String(),
-        downloadUrl: file.path,
-      );
-    }).toList();
+    return listFilesIn(dir, (file, _) => file.path);
   }
 
   /// Guarda bytes en el directorio de recibidos. Retorna el path completo.
   Future<String> saveFile(String fileName, List<int> bytes) async {
-    final dir = await getDirectory();
-    final filePath = '${dir.path}/$fileName';
-
-    // Si ya existe, agregar sufijo numérico
-    var target = File(filePath);
-    if (await target.exists()) {
-      final ext = fileName.contains('.') ? '.${fileName.split('.').last}' : '';
-      final base = ext.isNotEmpty
-          ? fileName.substring(0, fileName.length - ext.length)
-          : fileName;
-      var i = 1;
-      while (await target.exists()) {
-        target = File('${dir.path}/$base ($i)$ext');
-        i++;
-      }
-    }
-
-    await target.writeAsBytes(bytes);
-    return target.path;
+    final sink = await openWrite(fileName);
+    sink.add(bytes);
+    return sink.commit();
   }
 
-  /// Elimina un archivo recibido por nombre.
-  Future<void> deleteFile(String fileName) async {
+  /// Abre un archivo temporal (`.part`) para escribir una recepción en
+  /// streaming. El nombre que manda el otro dispositivo se sanea: solo se
+  /// usa el último componente, sin rutas ni `..`.
+  Future<ReceivedFileSink> openWrite(String fileName) async {
     final dir = await getDirectory();
-    final file = File('${dir.path}/$fileName');
-    if (await file.exists()) {
+    final safeName = sanitizeFileName(fileName);
+    final target = await uniqueFileIn(dir, safeName);
+    final part = File('${target.path}.part');
+    return ReceivedFileSink._(dir, safeName, part, part.openWrite());
+  }
+
+  /// Elimina un archivo recibido por nombre. Ignora nombres con rutas.
+  Future<void> deleteFile(String fileName) async {
+    final file = resolveInside(await getDirectory(), fileName);
+    if (file != null && await file.exists()) {
       await file.delete();
     }
   }
+}
+
+/// Escritura en curso de un archivo recibido.
+class ReceivedFileSink {
+  final Directory _dir;
+  final String _name;
+  final File _part;
+  final IOSink _sink;
+  int bytesWritten = 0;
+  bool _closed = false;
+
+  ReceivedFileSink._(this._dir, this._name, this._part, this._sink);
+
+  void add(List<int> data) {
+    _sink.add(data);
+    bytesWritten += data.length;
+  }
+
+  /// Cierra el archivo y lo renombra a su nombre final. Retorna la ruta.
+  Future<String> commit() async {
+    _closed = true;
+    await _sink.flush();
+    await _sink.close();
+    final target = await uniqueFileIn(_dir, _name);
+    await _part.rename(target.path);
+    return target.path;
+  }
+
+  /// Descarta lo escrito (transferencia cancelada o incompleta).
+  Future<void> discard() async {
+    if (!_closed) {
+      _closed = true;
+      try {
+        await _sink.close();
+      } catch (_) {}
+    }
+    try {
+      if (await _part.exists()) await _part.delete();
+    } catch (_) {}
+  }
+
+  String get partName => p.basename(_part.path);
 }

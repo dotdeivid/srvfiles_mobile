@@ -10,6 +10,10 @@ class ActiveTransfer {
   final String peerId;
   final bool waiting; // true mientras el sender espera accept/reject
 
+  /// Código de verificación E2E (6 dígitos); el emisor lo ve al llegar la
+  /// clave del receptor y debe coincidir con el que ve el receptor.
+  final String? sas;
+
   const ActiveTransfer({
     required this.transferId,
     required this.fileName,
@@ -19,11 +23,13 @@ class ActiveTransfer {
     required this.peerName,
     required this.peerId,
     required this.waiting,
+    this.sas,
   });
 
   ActiveTransfer copyWith({
     int? progress,
     bool? waiting,
+    String? sas,
   }) {
     return ActiveTransfer(
       transferId: transferId,
@@ -34,6 +40,7 @@ class ActiveTransfer {
       peerName: peerName,
       peerId: peerId,
       waiting: waiting ?? this.waiting,
+      sas: sas ?? this.sas,
     );
   }
 }

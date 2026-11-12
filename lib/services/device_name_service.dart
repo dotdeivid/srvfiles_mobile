@@ -24,16 +24,25 @@ String _randomName() {
 }
 
 class DeviceNameService {
-  /// Obtiene el nombre guardado, o genera uno aleatorio si es la primera vez.
+  /// Nombre ya resuelto en esta sesión (evita generar dos nombres distintos).
+  static String? _cached;
+
+  /// Obtiene el nombre guardado. Si es la primera vez, genera uno aleatorio y
+  /// lo guarda, de modo que todas las llamadas devuelven el mismo nombre.
   Future<String> getName() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final name = prefs.getString(_storageKey) ?? _randomName();
-      AppLogger.instance.debug('[DeviceNameService] getName: $name');
+      var name = prefs.getString(_storageKey);
+      if (name == null || name.trim().isEmpty) {
+        name = _cached ?? _randomName();
+        await prefs.setString(_storageKey, name);
+        AppLogger.instance.info('[DeviceNameService] generated name: $name');
+      }
+      _cached = name;
       return name;
     } catch (e) {
       AppLogger.instance.error('[DeviceNameService] getName failed', error: e);
-      return _randomName();
+      return _cached ??= _randomName();
     }
   }
 
@@ -44,6 +53,7 @@ class DeviceNameService {
       final finalName = trimmed.isEmpty ? _randomName() : trimmed;
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_storageKey, finalName);
+      _cached = finalName;
       AppLogger.instance.info('[DeviceNameService] name saved: $finalName');
       return finalName;
     } catch (e) {

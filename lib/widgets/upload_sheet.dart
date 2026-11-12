@@ -1,5 +1,5 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
+import '../features/files/files_controller.dart' show StagedFile;
 import '../theme/app_colors.dart';
 import '../utils/format.dart';
 import '../utils/file_icons.dart';
@@ -7,6 +7,9 @@ import '../utils/file_icons.dart';
 /// BottomSheet para staging de archivos antes de subir.
 /// Muestra la lista de archivos seleccionados, permite remover
 /// individuales, limpiar todos, y subir con barra de progreso.
+///
+/// [maxFileSizeMb] null o 0 significa "sin límite". Si algún archivo lo
+/// supera, el botón de subir queda deshabilitado.
 class UploadSheet extends StatelessWidget {
   const UploadSheet({
     super.key,
@@ -16,21 +19,28 @@ class UploadSheet extends StatelessWidget {
     required this.onRemove,
     required this.onClearAll,
     required this.onUpload,
+    this.onCancel,
     this.maxFileSizeMb,
   });
 
-  final List<File> files;
+  final List<StagedFile> files;
   final bool uploading;
   final double uploadProgress;
   final void Function(int index) onRemove;
   final VoidCallback onClearAll;
   final VoidCallback onUpload;
+  final VoidCallback? onCancel;
   final int? maxFileSizeMb;
+
+  int? get _maxBytes =>
+      (maxFileSizeMb ?? 0) > 0 ? maxFileSizeMb! * 1024 * 1024 : null;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final totalSize = files.fold<int>(0, (sum, f) => sum + f.lengthSync());
+    final totalSize = files.fold<int>(0, (sum, f) => sum + f.size);
+    final maxBytes = _maxBytes;
+    final anyOverLimit = maxBytes != null && files.any((f) => f.size > maxBytes);
 
     return Container(
       padding: const EdgeInsets.all(AppSpacing.md),
@@ -83,23 +93,20 @@ class UploadSheet extends StatelessWidget {
               itemCount: files.length,
               itemBuilder: (context, index) {
                 final file = files[index];
-                final name = file.path.split('/').last;
-                final size = file.lengthSync();
-                final overLimit = maxFileSizeMb != null &&
-                    size > maxFileSizeMb! * 1024 * 1024;
+                final overLimit = maxBytes != null && file.size > maxBytes;
 
                 return Padding(
                   padding: const EdgeInsets.symmetric(vertical: 4),
                   child: Row(
                     children: [
-                      Text(getFileIcon(name), style: const TextStyle(fontSize: 18)),
+                      Text(getFileIcon(file.name), style: const TextStyle(fontSize: 18)),
                       const SizedBox(width: AppSpacing.sm),
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              name,
+                              file.name,
                               style: TextStyle(
                                 fontSize: 13,
                                 color: overLimit
@@ -110,8 +117,8 @@ class UploadSheet extends StatelessWidget {
                             ),
                             Text(
                               overLimit
-                                  ? '${formatBytes(size)} — excede el límite'
-                                  : formatBytes(size),
+                                  ? '${formatBytes(file.size)} — excede el límite de $maxFileSizeMb MB'
+                                  : formatBytes(file.size),
                               style: TextStyle(
                                 fontSize: 11,
                                 color: overLimit
@@ -126,12 +133,13 @@ class UploadSheet extends StatelessWidget {
                         IconButton(
                           icon: const Icon(Icons.close, size: 16),
                           color: AppColors.textMuted,
+                          tooltip: 'Quitar ${file.name}',
                           onPressed: () => onRemove(index),
                           visualDensity: VisualDensity.compact,
                           padding: EdgeInsets.zero,
                           constraints: const BoxConstraints(
-                            minWidth: 32,
-                            minHeight: 32,
+                            minWidth: 40,
+                            minHeight: 40,
                           ),
                         ),
                     ],
@@ -165,13 +173,24 @@ class UploadSheet extends StatelessWidget {
               ),
             ),
             const SizedBox(height: AppSpacing.xs),
-            Text(
-              '${(uploadProgress * 100).round()}%',
-              style: const TextStyle(
-                fontSize: 12,
-                color: AppColors.textSecondary,
-                fontFamily: 'monospace',
-              ),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  '${(uploadProgress * 100).round()}%',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: AppColors.textSecondary,
+                    fontFamily: 'monospace',
+                  ),
+                ),
+                if (onCancel != null)
+                  TextButton(
+                    onPressed: onCancel,
+                    style: TextButton.styleFrom(foregroundColor: AppColors.danger),
+                    child: const Text('Cancelar'),
+                  ),
+              ],
             ),
             const SizedBox(height: AppSpacing.sm),
           ],
@@ -181,11 +200,13 @@ class UploadSheet extends StatelessWidget {
             SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(
-                onPressed: onUpload,
+                onPressed: anyOverLimit || files.isEmpty ? null : onUpload,
                 icon: const Icon(Icons.upload_rounded, size: 18),
                 label: Text(
-                  'Subir ${files.length > 1 ? '${files.length} archivos' : 'archivo'}'
-                  ' (${formatBytes(totalSize)})',
+                  anyOverLimit
+                      ? 'Quitá los archivos que exceden el límite'
+                      : 'Subir ${files.length > 1 ? '${files.length} archivos' : 'archivo'}'
+                          ' (${formatBytes(totalSize)})',
                 ),
               ),
             ),

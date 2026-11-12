@@ -1,11 +1,12 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
+import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
-import '../config/api_config.dart';
 import '../models/file_info.dart';
 import '../screens/preview_screen.dart';
 import '../services/app_logger.dart';
+import '../services/files_service.dart';
 import '../utils/file_type_helper.dart';
 import '../utils/format.dart';
 
@@ -17,8 +18,11 @@ class _PreviewCacheEntry {
 }
 
 /// Handles opening a file preview.
-/// Server files are downloaded to a temp path and cleaned up on close.
-/// Local/received files are opened directly.
+///
+/// Los archivos del servidor se descargan (en streaming) a un temporal que se
+/// reutiliza durante 5 minutos si se vuelve a abrir el mismo archivo del mismo
+/// servidor; los temporales vencidos se borran en cada uso y todos con
+/// [clearCache]. Los archivos locales/recibidos se abren directamente.
 class PreviewService {
   PreviewService._();
 
@@ -26,15 +30,17 @@ class PreviewService {
   static final Map<String, _PreviewCacheEntry> _cache = {};
 
   /// Called once the server config is available.
-  static void setMaxPreviewMb(int mb) => _maxBytes = mb * 1024 * 1024;
+  static void setMaxPreviewMb(int mb) {
+    if (mb > 0) _maxBytes = mb * 1024 * 1024;
+  }
 
   // ─── Public API ────────────────────────────────────────────────────
 
   /// Downloads [file] from the server to a temp path, then opens [PreviewScreen].
   static Future<void> previewServerFile({
     required FileInfo file,
-    required ApiConfig config,
-    required String? sessionToken,
+    required FilesService filesService,
+    required String serverUrl,
     required BuildContext context,
   }) async {
     if (!FileTypeHelper.canPreview(file.name)) {
@@ -47,39 +53,39 @@ class PreviewService {
       return;
     }
 
-    if (!context.mounted) return;
-    showDialog(
+    final navigator = Navigator.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+    unawaited(showDialog<void>(
       context: context,
       barrierDismissible: false,
       builder: (_) => const Center(
         child: CircularProgressIndicator(),
       ),
-    );
+    ));
 
+    String tempPath;
     try {
-      final tempPath = await _downloadToTemp(file, config, sessionToken);
-      if (!context.mounted) return;
-      Navigator.of(context).pop(); // dismiss loading
-      await Navigator.of(context).push(MaterialPageRoute(
-        builder: (_) => PreviewScreen(
-          filePath: tempPath,
-          fileName: file.name,
-          isTempFile: true,
-        ),
-      ));
+      tempPath = await _downloadToTemp(file, filesService, serverUrl);
     } catch (e, st) {
       AppLogger.instance.error(
         'preview_service.dart: failed to preview server file',
         error: e,
         stack: st,
       );
-      if (context.mounted) {
-        Navigator.of(context).pop(); // dismiss loading
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No se pudo previsualizar el archivo')),
-        );
-      }
+      navigator.pop(); // dismiss loading
+      messenger.showSnackBar(
+        const SnackBar(content: Text('No se pudo previsualizar el archivo')),
+      );
+      return;
     }
+
+    navigator.pop(); // dismiss loading
+    await navigator.push(MaterialPageRoute(
+      builder: (_) => PreviewScreen(
+        filePath: tempPath,
+        fileName: file.name,
+      ),
+    ));
   }
 
   /// Opens [PreviewScreen] directly for a file already on disk.
@@ -96,45 +102,64 @@ class PreviewService {
       builder: (_) => PreviewScreen(
         filePath: filePath,
         fileName: fileName,
-        isTempFile: false,
       ),
     ));
   }
 
+  /// Borra todos los temporales de previsualización.
+  static Future<void> clearCache() async {
+    final paths = _cache.values.map((e) => e.path).toList();
+    _cache.clear();
+    for (final path in paths) {
+      await _deleteQuietly(path);
+    }
+  }
+
   // ─── Internal ──────────────────────────────────────────────────────
 
-  static String _cacheKey(FileInfo file) => '${file.name}_${file.size}';
+  /// La clave incluye el servidor y la fecha: dos servidores con un archivo
+  /// del mismo nombre y tamaño no comparten temporal.
+  static String _cacheKey(FileInfo file, String serverUrl) =>
+      '$serverUrl|${file.name}|${file.size}|${file.createdAt}';
 
-  static void clearCache() => _cache.clear();
+  static Future<void> _purgeExpired() async {
+    final expired = _cache.entries.where((e) => !e.value.isValid).toList();
+    for (final e in expired) {
+      _cache.remove(e.key);
+      await _deleteQuietly(e.value.path);
+    }
+  }
 
   static Future<String> _downloadToTemp(
     FileInfo file,
-    ApiConfig config,
-    String? sessionToken,
+    FilesService filesService,
+    String serverUrl,
   ) async {
-    final key = _cacheKey(file);
+    await _purgeExpired();
+    final key = _cacheKey(file, serverUrl);
     final cached = _cache[key];
-    if (cached != null && cached.isValid && await File(cached.path).exists()) {
+    if (cached != null && await File(cached.path).exists()) {
       return cached.path;
     }
 
-    final url = config.downloadUrl(file.name);
-    final headers = sessionToken != null
-        ? {'X-SrvFiles-Token': sessionToken}
-        : <String, String>{};
-
-    final response = await http.get(Uri.parse(url), headers: headers);
-    if (response.statusCode != 200) {
-      throw Exception('HTTP ${response.statusCode}');
-    }
-
     final tempDir = await getTemporaryDirectory();
-    final safeName = file.name.replaceAll(RegExp(r'[^\w\.\-]'), '_');
-    final tempFile = File('${tempDir.path}/srvfiles_preview_$safeName');
-    await tempFile.writeAsBytes(response.bodyBytes);
+    final previewDir = Directory(p.join(tempDir.path, 'srvfiles_preview'));
+    if (!await previewDir.exists()) await previewDir.create(recursive: true);
+    // Nombre único por clave, conservando la extensión para el visor.
+    final ext = p.extension(file.name).replaceAll(RegExp(r'[^\w.]'), '');
+    final tempFile = File(p.join(previewDir.path, '${key.hashCode.toUnsigned(32)}$ext'));
+
+    await filesService.downloadTo(file.name, tempFile);
 
     _cache[key] = _PreviewCacheEntry(tempFile.path);
     return tempFile.path;
+  }
+
+  static Future<void> _deleteQuietly(String path) async {
+    try {
+      final f = File(path);
+      if (await f.exists()) await f.delete();
+    } catch (_) {}
   }
 
   static void _showTooBig(BuildContext context, FileInfo file) {

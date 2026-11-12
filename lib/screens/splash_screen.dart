@@ -1,13 +1,16 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import '../config/api_config.dart';
 import '../theme/app_colors.dart';
+import '../utils/server_url.dart';
 import '../widgets/gradient_text.dart';
 import '../widgets/pulsing_dot.dart';
 import '../services/discovery_service.dart';
+import '../services/embedded_relay.dart';
+import '../services/notification_service.dart';
+import '../services/server_history.dart';
 import '../services/app_logger.dart';
 import 'home_screen.dart';
-
-const String _lastServerKey = 'srvfiles-last-server';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -18,134 +21,155 @@ class SplashScreen extends StatefulWidget {
 
 class _SplashScreenState extends State<SplashScreen> {
   final _discoveryService = DiscoveryService();
+  final _history = const ServerHistory();
 
   bool _searching = true;
+  bool _connecting = false;
   String? _error;
   final _ipController = TextEditingController();
   List<DiscoveredServer> _foundServers = [];
 
+  /// Se incrementa en cada escaneo; un escaneo viejo deja de publicar.
+  int _scanId = 0;
+
   @override
   void initState() {
     super.initState();
+    // En el splash nadie usa el relay local: liberarlo.
+    unawaited(EmbeddedRelay.shared.stop());
     _scan();
+    // Pedir el permiso de notificaciones ya con la UI visible.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(NotificationService().requestPermission());
+    });
   }
 
   @override
   void dispose() {
+    _scanId++; // cancela el escaneo en curso
     _ipController.dispose();
     super.dispose();
   }
 
+  void _addServers(Iterable<DiscoveredServer> servers) {
+    final existing = _foundServers.map((s) => s.url).toSet();
+    final fresh = servers
+        .where((s) => s.servesFiles && !existing.contains(s.url))
+        .toList();
+    if (fresh.isEmpty) return;
+    setState(() => _foundServers = [..._foundServers, ...fresh]);
+  }
+
   Future<void> _scan() async {
+    final scanId = ++_scanId;
+    bool cancelled() => scanId != _scanId || !mounted;
     setState(() {
       _searching = true;
       _error = null;
       _foundServers = [];
     });
 
-    // 1. Intentar con el último servidor guardado para mostrarlo rápido
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final lastServer = prefs.getString(_lastServerKey);
-      if (lastServer != null) {
+    // El último servidor y el barrido de la subred van en paralelo.
+    final lastProbe = () async {
+      try {
+        final lastServer = await _history.getLastServer();
+        if (lastServer == null) return;
         AppLogger.instance.debug('[Splash] probing last server: $lastServer');
         final server = await _discoveryService.probe(lastServer);
-        if (server != null && mounted) {
-          AppLogger.instance.info('[Splash] last server reachable: $lastServer');
-          setState(() => _foundServers = [server]);
+        if (server != null && !cancelled()) {
+          AppLogger.instance.info(
+            '[Splash] last server reachable: $lastServer',
+          );
+          _addServers([server]);
         }
+      } catch (e) {
+        AppLogger.instance.warn('[Splash] error probing last server: $e');
       }
-    } catch (e) {
-      AppLogger.instance.warn('[Splash] error probing last server: $e');
-    }
+    }();
 
-    // 2. Scan completo de la subred LAN
     AppLogger.instance.info('[Splash] starting LAN scan');
     try {
-      final servers = await _discoveryService.scanLan();
-      AppLogger.instance.info('[Splash] LAN scan complete: ${servers.length} servers found');
-
-      if (mounted) {
-        final existing = _foundServers.map((s) => s.url).toSet();
-        final merged = [
-          ..._foundServers,
-          ...servers.where((s) => !existing.contains(s.url)),
-        ];
-        setState(() {
-          _foundServers = merged;
-          _searching = false;
-        });
-      }
+      final servers = await _discoveryService.scanLan(isCancelled: cancelled);
+      await lastProbe;
+      if (cancelled()) return;
+      AppLogger.instance.info(
+        '[Splash] LAN scan complete: ${servers.length} servers found',
+      );
+      _addServers(servers);
+      setState(() => _searching = false);
     } catch (e) {
       AppLogger.instance.error('[Splash] LAN scan failed', error: e);
-      if (mounted) {
+      if (!cancelled()) {
         setState(() {
           _searching = false;
-          _error = 'Error durante el escaneo: $e';
+          _error =
+              'No se pudo escanear la red. ¿Estás conectado a una red wifi?';
         });
       }
     }
   }
-
-  Future<void> _saveLastServer(String url) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_lastServerKey, url);
-  }
-
 
   Future<void> _onServerSelected(String serverUrl) async {
     AppLogger.instance.info('[Splash] server selected: $serverUrl');
-    await _saveLastServer(serverUrl);
+    await _history.saveLastServer(serverUrl);
     if (mounted) {
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => HomeScreen(serverUrl: serverUrl)),
+      unawaited(
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (_) => HomeScreen(serverUrl: serverUrl)),
+        ),
       );
     }
   }
 
   Future<void> _onSkipServer() async {
     if (mounted) {
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => const HomeScreen(serverUrl: null)),
+      unawaited(
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (_) => const HomeScreen(serverUrl: null)),
+        ),
       );
     }
   }
 
   Future<void> _onBeServer() async {
     if (mounted) {
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(
-          builder: (_) => const HomeScreen(serverUrl: null, autoServerMode: true),
+      unawaited(
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (_) =>
+                const HomeScreen(serverUrl: null, autoServerMode: true),
+          ),
         ),
       );
     }
   }
 
   Future<void> _connectManual() async {
-    final input = _ipController.text.trim();
-    if (input.isEmpty) return;
-
-    String url = input;
-    if (!url.startsWith('http')) url = 'http://$url';
-    if (!RegExp(r':\d+$').hasMatch(url)) url = '$url:3001';
+    final url = normalizeServerUrl(_ipController.text);
+    if (url == null) {
+      setState(
+        () => _error =
+            'Dirección inválida. Ejemplo: 192.168.1.20:$defaultServerPort',
+      );
+      return;
+    }
 
     AppLogger.instance.info('[Splash] manual connect attempt: $url');
     setState(() {
-      _searching = true;
+      _connecting = true;
       _error = null;
     });
 
     final ok = await _discoveryService.tryConnect(url);
-    if (ok && mounted) {
+    if (!mounted) return;
+    if (ok) {
       await _onServerSelected(url);
     } else {
       AppLogger.instance.warn('[Splash] manual connect failed: $url');
-      if (mounted) {
-        setState(() {
-          _searching = false;
-          _error = 'No se pudo conectar a $url';
-        });
-      }
+      setState(() {
+        _connecting = false;
+        _error = 'No se encontró un servidor SrvFiles en $url';
+      });
     }
   }
 
@@ -186,10 +210,7 @@ class _SplashScreenState extends State<SplashScreen> {
 
               const SizedBox(height: AppSpacing.md),
 
-              GradientText(
-                'SrvFiles',
-                style: theme.textTheme.headlineMedium,
-              ),
+              GradientText('SrvFiles', style: theme.textTheme.headlineMedium),
 
               const SizedBox(height: AppSpacing.xxl),
 
@@ -263,7 +284,7 @@ class _SplashScreenState extends State<SplashScreen> {
                 textInputAction: TextInputAction.go,
                 onSubmitted: (_) => _connectManual(),
                 decoration: const InputDecoration(
-                  hintText: '192.168.1.x:3001',
+                  hintText: '192.168.1.x:$defaultServerPort',
                   prefixIcon: Icon(
                     Icons.lan_rounded,
                     color: AppColors.textMuted,
@@ -276,8 +297,14 @@ class _SplashScreenState extends State<SplashScreen> {
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
-                  onPressed: _searching ? null : _connectManual,
-                  child: const Text('Conectar'),
+                  onPressed: _connecting ? null : _connectManual,
+                  child: _connecting
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Text('Conectar'),
                 ),
               ),
 
@@ -286,7 +313,7 @@ class _SplashScreenState extends State<SplashScreen> {
               SizedBox(
                 width: double.infinity,
                 child: OutlinedButton(
-                  onPressed: _searching ? null : _onSkipServer,
+                  onPressed: _connecting ? null : _onSkipServer,
                   style: OutlinedButton.styleFrom(
                     side: const BorderSide(color: AppColors.borderMedium),
                   ),
@@ -298,7 +325,7 @@ class _SplashScreenState extends State<SplashScreen> {
 
               Center(
                 child: TextButton(
-                  onPressed: _searching ? null : _onBeServer,
+                  onPressed: _connecting ? null : _onBeServer,
                   style: TextButton.styleFrom(
                     foregroundColor: AppColors.textMuted,
                   ),
@@ -349,10 +376,12 @@ class _SplashScreenState extends State<SplashScreen> {
             ),
           ),
           // Filas de servidores
-          ..._foundServers.map((server) => _ServerRow(
-                server: server,
-                onTap: _searching ? null : () => _onServerSelected(server.url),
-              )),
+          ..._foundServers.map(
+            (server) => _ServerRow(
+              server: server,
+              onTap: _connecting ? null : () => _onServerSelected(server.url),
+            ),
+          ),
         ],
       ),
     );
@@ -387,8 +416,10 @@ class _ServerRow extends StatelessWidget {
                 children: [
                   Row(
                     children: [
-                      const Icon(
-                        Icons.computer_rounded,
+                      Icon(
+                        server.isMobile
+                            ? Icons.phone_android_rounded
+                            : Icons.computer_rounded,
                         size: 14,
                         color: AppColors.textSecondary,
                       ),

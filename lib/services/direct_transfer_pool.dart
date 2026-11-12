@@ -1,8 +1,6 @@
 import 'dart:async';
-import 'package:flutter/foundation.dart';
 import '../config/api_config.dart';
 import '../models/transfer_client.dart';
-import '../models/transfer_request.dart';
 import 'transfer_service.dart';
 import 'app_logger.dart';
 
@@ -10,7 +8,10 @@ import 'app_logger.dart';
 class DirectPeerConnection {
   final TransferService service;
   final String targetClientId;
-  const DirectPeerConnection({required this.service, required this.targetClientId});
+
+  /// true si el dueño del relay soporta cifrado de extremo a extremo.
+  final bool targetE2E;
+  const DirectPeerConnection({required this.service, required this.targetClientId, this.targetE2E = false});
 }
 
 /// Pool de conexiones WebSocket a relays remotos para envío directo.
@@ -22,13 +23,18 @@ class DirectTransferPool {
 
   static const _inactivityTimeout = Duration(seconds: 60);
 
-  // ─── Callbacks de eventos (delegados al HomeScreen) ──────────────────
-  void Function(IncomingTransferRequest)? onSendRequest;
-  void Function(String transferId)? onSendAccept;
-  void Function(String transferId, String? reason)? onSendReject;
-  void Function(String transferId)? onSendCancel;
-  void Function(String transferId)? onSendComplete;
-  void Function(String transferId, Uint8List data)? onBinaryChunk;
+  /// Se llama con cada conexión nueva, antes de conectar, para que el dueño
+  /// (TransferController) enganche los eventos de transferencia y responda
+  /// por esa misma conexión.
+  void Function(TransferService service)? onConnectionOpened;
+
+  /// true si la conexión tiene una transferencia en curso: entonces no se
+  /// cierra por inactividad.
+  bool Function(TransferService service)? isBusy;
+
+  /// Se llama cuando una conexión del pool se cae, para abortar sus
+  /// transferencias.
+  void Function(TransferService service)? onConnectionClosed;
 
   /// Devuelve una conexión activa al relay remoto en [targetUrl].
   ///
@@ -46,6 +52,7 @@ class DirectTransferPool {
       return DirectPeerConnection(
         service: existing.service,
         targetClientId: existing.targetClientId,
+        targetE2E: existing.targetE2E,
       );
     }
 
@@ -55,8 +62,10 @@ class DirectTransferPool {
 
     AppLogger.instance.info('[DirectTransferPool] opening new connection to $targetUrl');
     final service = TransferService();
-    final completer = Completer<String?>();
+    final completer = Completer<TransferClient?>();
     String? myClientId;
+
+    onConnectionOpened?.call(service);
 
     service.onWelcome = (id) {
       myClientId = id;
@@ -65,17 +74,20 @@ class DirectTransferPool {
     service.onClientsUpdate = (clients) {
       if (completer.isCompleted || myClientId == null) return;
       final target = _findRelayOwner(clients, myClientId);
-      if (target != null) completer.complete(target.clientId);
+      if (target != null) completer.complete(target);
     };
 
-    // Delegar eventos de transferencia al HomeScreen
-    service.onSendRequest = (req) => onSendRequest?.call(req);
-    service.onSendAccept = (id) => onSendAccept?.call(id);
-    service.onSendReject = (id, r) => onSendReject?.call(id, r);
-    service.onSendCancel = (id) => onSendCancel?.call(id);
-    service.onSendComplete = (id) => onSendComplete?.call(id);
-    service.onBinaryChunk = (id, data) => onBinaryChunk?.call(id, data);
-    service.onDisconnected = () => _close(targetUrl);
+    service.onDisconnected = () {
+      if (!completer.isCompleted) completer.complete(null);
+      onConnectionClosed?.call(service);
+      _close(targetUrl);
+    };
+
+    // El relay tiene el modo servidor activo: no se puede enviar sin PIN.
+    service.onAuthRequired = () {
+      AppLogger.instance.warn('[DirectTransferPool] $targetUrl requires PIN');
+      if (!completer.isCompleted) completer.complete(null);
+    };
 
     // En relay-only mode el relay envía auth_ok inmediatamente
     service.onAuthOk = () {
@@ -85,33 +97,44 @@ class DirectTransferPool {
 
     service.connect(ApiConfig(targetUrl));
 
-    String? targetClientId;
+    TransferClient? target;
     try {
-      targetClientId = await completer.future.timeout(const Duration(seconds: 5));
+      target = await completer.future.timeout(const Duration(seconds: 5));
     } catch (e) {
-      AppLogger.instance.error('[DirectTransferPool] connection timeout or error', error: e);
+      AppLogger.instance.warn('[DirectTransferPool] connection timeout: $e');
     }
 
-    if (targetClientId == null) {
+    if (target == null) {
       AppLogger.instance.warn('[DirectTransferPool] could not resolve relay owner for $targetUrl');
       service.dispose();
       return null;
     }
 
-    AppLogger.instance.info('[DirectTransferPool] connection established', );
+    AppLogger.instance.info('[DirectTransferPool] connection established');
 
     final entry = _PoolEntry(
       service: service,
-      targetClientId: targetClientId,
-      onTimeout: () => _close(targetUrl),
+      targetClientId: target.clientId,
+      targetE2E: target.e2e,
+      onTimeout: () => _onIdle(targetUrl),
     );
     _pool[targetUrl] = entry;
 
-    return DirectPeerConnection(service: service, targetClientId: targetClientId);
+    return DirectPeerConnection(service: service, targetClientId: target.clientId, targetE2E: target.e2e);
   }
 
   /// Reinicia el timer de inactividad de una conexión (llamar después de una transferencia).
   void touch(String targetUrl) => _pool[targetUrl]?.resetTimer();
+
+  void _onIdle(String targetUrl) {
+    final entry = _pool[targetUrl];
+    if (entry == null) return;
+    if (isBusy?.call(entry.service) ?? false) {
+      entry.resetTimer();
+      return;
+    }
+    _close(targetUrl);
+  }
 
   void _close(String targetUrl) {
     AppLogger.instance.info('[DirectTransferPool] closing connection to $targetUrl');
@@ -129,14 +152,12 @@ class DirectTransferPool {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────
 
-/// Busca el dueño del relay: primero el marcado como isOwner, luego cualquier
-/// cliente que no sea yo mismo.
+/// Busca el dueño del relay: el cliente marcado como isOwner (conectado desde
+/// el propio teléfono). Sin fallback: ofrecer el archivo a "cualquier otro
+/// cliente" podía mandarlo a un navegador ajeno.
 TransferClient? _findRelayOwner(List<TransferClient> clients, String? myId) {
   for (final c in clients) {
     if (c.isOwner && c.clientId != myId) return c;
-  }
-  for (final c in clients) {
-    if (c.clientId != myId) return c;
   }
   return null;
 }
@@ -146,12 +167,14 @@ TransferClient? _findRelayOwner(List<TransferClient> clients, String? myId) {
 class _PoolEntry {
   final TransferService service;
   final String targetClientId;
+  final bool targetE2E;
   Timer? _timer;
-  final VoidCallback onTimeout;
+  final void Function() onTimeout;
 
   _PoolEntry({
     required this.service,
     required this.targetClientId,
+    required this.targetE2E,
     required this.onTimeout,
   }) {
     resetTimer();
