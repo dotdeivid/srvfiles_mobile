@@ -52,10 +52,13 @@ Los archivos del servidor se descargan a un directorio temporal y se eliminan al
 
 | Herramienta | Versión |
 |-------------|---------|
-| Flutter | 3.22+ (stable) |
-| Dart SDK | 3.4+ |
-| Android SDK | API 21+ (Android 5.0) |
+| Flutter | 3.50+ (stable) |
+| Dart SDK | 3.13+ |
+| Android SDK | compila contra API 37; instala desde API 24 (Android 7.0) |
 | Java | 17 |
+| Gradle / AGP / Kotlin | 9.5.0 / 9.3.1 / 2.4.20 (vienen en el wrapper del proyecto) |
+
+> Los widgets Material vienen de `package:material_ui` (Flutter los separó del SDK en 3.47). Usar `import 'package:material_ui/material_ui.dart';` en lugar de `package:flutter/material.dart`.
 
 ```bash
 flutter doctor

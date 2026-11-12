@@ -456,7 +456,7 @@ class _UnknownPreview extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Text('📁', style: TextStyle(fontSize: 72)),
+            const Text('📃', style: TextStyle(fontSize: 72)),
             const SizedBox(height: AppSpacing.md),
             const Text(
               'Este tipo de archivo no se puede previsualizar.',

@@ -27,4 +27,5 @@ Singleton service that wraps `flutter_local_notifications`. Shows system notific
   - `'srvfiles_bg'` ("SrvFiles activo"): `Importance.low`, no sound, no vibration, `ongoing: true` — the foreground service notification.
   - `'srvfiles_transfers'` ("Transferencias"): `Importance.defaultImportance` — transfer/download notifications.
 - **`didChangeAppLifecycleState` integration** (in `HomeScreen`): `startForeground()` is called on `AppLifecycleState.paused`; `stopForeground()` is called on `resumed` and in `dispose`. The foreground service is never active while the user is using the app.
-- Dependencies: `flutter_local_notifications`, `AppLogger`, `dart:io`.
+- Dependencies: `flutter_local_notifications` (v23: todos los métodos usan parámetros con nombre, p. ej. `show(id:, title:, body:, notificationDetails:)`), `AppLogger`, `dart:io`.
+- La v23 exige compilar contra Android API 37 (`compileSdk` en `android/app/build.gradle.kts`).
