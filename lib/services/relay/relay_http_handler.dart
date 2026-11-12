@@ -96,7 +96,12 @@ class RelayHttpHandler {
     if (store == null) return _unavailable(req);
     String? name;
     try {
-      final body = jsonDecode(await utf8.decodeStream(req)) as Map<String, dynamic>;
+      final bytes = BytesBuilder(copy: false);
+      await for (final chunk in req) {
+        bytes.add(chunk);
+        if (bytes.length > 4096) throw const FormatException('body too large');
+      }
+      final body = jsonDecode(utf8.decode(bytes.takeBytes())) as Map<String, dynamic>;
       name = body['name'] as String?;
     } catch (_) {}
     if (name == null || await store.getFile(name) == null) {

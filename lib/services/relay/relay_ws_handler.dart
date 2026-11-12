@@ -227,7 +227,7 @@ class RelayWsHandler {
           deviceType: msg['deviceType'] == 'mobile' ? 'mobile' : 'desktop',
           isOwner: conn.isLocalhost,
           cipher: conn.cipher,
-          e2e: (msg['e2e'] as num?) != null && (msg['e2e'] as num) >= 1,
+          e2e: msg['e2e'] is num && (msg['e2e'] as num) >= 1,
         );
         conn.client = newClient;
         clients[clientId] = newClient;

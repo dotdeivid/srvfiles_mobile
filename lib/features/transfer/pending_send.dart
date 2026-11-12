@@ -26,6 +26,10 @@ class PendingSend {
   /// Sesión E2E; null hasta que llega la clave del receptor.
   E2ESession? session;
 
+  /// Derivación en curso de [session]. Los callbacks del servicio no se
+  /// esperan entre sí: un `send-accept` puede procesarse antes de que termine.
+  Future<void>? keying;
+
   PendingSend({
     required this.transferId,
     required this.file,

@@ -259,7 +259,9 @@ class TransferController extends ChangeNotifier {
   Future<void> _onSendKey(TransferService service, String transferId, String publicKey) async {
     final pending = _pendingSend;
     if (pending == null || pending.transferId != transferId || pending.service != service) return;
-    if (pending.session != null) return;
+    if (pending.session != null || pending.keying != null) return;
+    final keying = Completer<void>();
+    pending.keying = keying.future;
     try {
       final session = await E2ESession.derive(
         ownPrivateKey: pending.keyPair.privateKey,
@@ -280,6 +282,8 @@ class TransferController extends ChangeNotifier {
       _finishSend();
       _sendQueue.clear();
       showSnackBar?.call('No se pudo establecer el cifrado con el destinatario', isError: true);
+    } finally {
+      keying.complete();
     }
   }
 
@@ -288,6 +292,8 @@ class TransferController extends ChangeNotifier {
     if (pending == null || pending.transferId != transferId) return;
     if (service != null && pending.service != service) return;
 
+    await pending.keying;
+    if (_pendingSend != pending) return;
     final session = pending.session;
     if (session == null) {
       // Aceptó sin intercambiar claves: no se envía nada sin cifrado E2E.
