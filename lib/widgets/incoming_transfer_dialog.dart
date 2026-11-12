@@ -2,20 +2,27 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../theme/app_colors.dart';
 import '../models/transfer_request.dart';
+import '../services/e2e_service.dart';
 import '../utils/format.dart';
 import '../utils/file_icons.dart';
 
 /// Diálogo modal que aparece cuando otro dispositivo quiere enviarnos un archivo.
 /// Replica IncomingTransferModal.tsx del frontend web.
-class IncomingTransferDialog extends StatelessWidget {
+///
+/// Muestra el código de verificación E2E ([sas]). "Aceptar" solo se habilita
+/// cuando el usuario confirma que coincide con el que ve el emisor: así se
+/// detecta un intermediario que haya cambiado las claves.
+class IncomingTransferDialog extends StatefulWidget {
   const IncomingTransferDialog({
     super.key,
     required this.request,
+    required this.sas,
     required this.onAccept,
     required this.onReject,
   });
 
   final IncomingTransferRequest request;
+  final String sas;
   final VoidCallback onAccept;
   final VoidCallback onReject;
 
@@ -26,6 +33,7 @@ class IncomingTransferDialog extends StatelessWidget {
   static Future<bool?> show(
     BuildContext context,
     IncomingTransferRequest request, {
+    required String sas,
     Future<void>? dismissed,
   }) {
     var open = true;
@@ -58,12 +66,22 @@ class IncomingTransferDialog extends StatelessWidget {
         }
         return IncomingTransferDialog(
           request: request,
+          sas: sas,
           onAccept: () => close(ctx, true),
           onReject: () => close(ctx, false),
         );
       },
     ).whenComplete(() => open = false);
   }
+
+  @override
+  State<IncomingTransferDialog> createState() => _IncomingTransferDialogState();
+}
+
+class _IncomingTransferDialogState extends State<IncomingTransferDialog> {
+  bool _confirmed = false;
+
+  IncomingTransferRequest get request => widget.request;
 
   @override
   Widget build(BuildContext context) {
@@ -160,6 +178,51 @@ class IncomingTransferDialog extends StatelessWidget {
 
           const SizedBox(height: AppSpacing.md),
 
+          // Código de verificación E2E
+          Semantics(
+            label: 'Código de verificación ${widget.sas.split('').join(' ')}',
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(AppSpacing.sm),
+              decoration: BoxDecoration(
+                color: AppColors.accentPrimary.withValues(alpha: 0.08),
+                borderRadius: AppRadius.borderSm,
+                border: Border.all(color: AppColors.accentPrimary.withValues(alpha: 0.3)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.verified_user_rounded, size: 18, color: AppColors.accentPrimary),
+                  const SizedBox(width: AppSpacing.sm),
+                  const Expanded(
+                    child: Text('Código de verificación',
+                        style: TextStyle(color: AppColors.textSecondary, fontSize: 13)),
+                  ),
+                  Text(
+                    E2ESession.formatSas(widget.sas),
+                    style: const TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 20,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 1.5,
+                      color: AppColors.textPrimary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          CheckboxListTile(
+            value: _confirmed,
+            onChanged: (v) => setState(() => _confirmed = v ?? false),
+            contentPadding: EdgeInsets.zero,
+            controlAffinity: ListTileControlAffinity.leading,
+            dense: true,
+            title: Text(
+              'El código coincide con el que se ve en ${request.fromName}',
+              style: const TextStyle(fontSize: 13, color: AppColors.textPrimary),
+            ),
+          ),
+
           Text(
             '¿Querés recibir este archivo?',
             style: TextStyle(
@@ -176,7 +239,7 @@ class IncomingTransferDialog extends StatelessWidget {
           child: TextButton(
             onPressed: () {
               HapticFeedback.mediumImpact();
-              onReject();
+              widget.onReject();
             },
             child: const Text('Rechazar'),
           ),
@@ -185,10 +248,12 @@ class IncomingTransferDialog extends StatelessWidget {
           button: true,
           label: 'Aceptar transferencia',
           child: ElevatedButton(
-            onPressed: () {
-              HapticFeedback.mediumImpact();
-              onAccept();
-            },
+            onPressed: _confirmed
+                ? () {
+                    HapticFeedback.mediumImpact();
+                    widget.onAccept();
+                  }
+                : null,
             child: const Text('Aceptar'),
           ),
         ),

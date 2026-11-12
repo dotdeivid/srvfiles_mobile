@@ -227,6 +227,7 @@ class RelayWsHandler {
           deviceType: msg['deviceType'] == 'mobile' ? 'mobile' : 'desktop',
           isOwner: conn.isLocalhost,
           cipher: conn.cipher,
+          e2e: (msg['e2e'] as num?) != null && (msg['e2e'] as num) >= 1,
         );
         conn.client = newClient;
         clients[clientId] = newClient;
@@ -259,6 +260,12 @@ class RelayWsHandler {
         final transferId = msg['transferId'] as String?;
         if (to == null || transferId == null) return;
         if (transferId.isEmpty || transferId.length > transferIdLength) return;
+        // Cifrado de extremo a extremo obligatorio: sin la clave del emisor no se reenvía.
+        final senderKey = _e2eField(msg, 'publicKey');
+        if (!_validPublicKey(senderKey)) {
+          send(ws, {'type': 'send-reject', 'transferId': transferId, 'reason': 'e2e-required'}, c.cipher);
+          return;
+        }
         if (transfers.containsKey(transferId)) {
           // No permitir pisar una sesión existente.
           send(ws, {'type': 'send-reject', 'transferId': transferId, 'reason': 'duplicate'}, c.cipher);
@@ -267,6 +274,10 @@ class RelayWsHandler {
         final receiver = clients[to];
         if (receiver == null || to == clientId) {
           send(ws, {'type': 'send-reject', 'transferId': transferId, 'reason': 'offline'}, c.cipher);
+          return;
+        }
+        if (!receiver.e2e) {
+          send(ws, {'type': 'send-reject', 'transferId': transferId, 'reason': 'e2e-unsupported'}, c.cipher);
           return;
         }
         transfers[transferId] = TransferSession(
@@ -285,13 +296,28 @@ class RelayWsHandler {
           'fileSize': fileSize ?? 0,
           'mimeType': mimeType ?? 'application/octet-stream',
           'transferId': transferId,
+          'e2e': {'publicKey': senderKey},
         }, receiver.cipher);
+
+      case 'send-key':
+        // Clave pública E2E del receptor → emisor. El relay no puede
+        // descifrar el contenido: solo reenvía.
+        final transferId = msg['transferId'] as String?;
+        final publicKey = msg['publicKey'] as String?;
+        if (transferId == null || !_validPublicKey(publicKey)) return;
+        final session = transfers[transferId];
+        if (session == null || session.receiverClientId != clientId || session.keySent) return;
+        session.keySent = true;
+        final sender = clients[session.senderClientId];
+        if (sender != null) {
+          send(sender.ws, {'type': 'send-key', 'transferId': transferId, 'publicKey': publicKey}, sender.cipher);
+        }
 
       case 'send-accept':
         final transferId = msg['transferId'] as String?;
         if (transferId == null) return;
         final session = transfers[transferId];
-        if (session == null || session.receiverClientId != clientId) return;
+        if (session == null || session.receiverClientId != clientId || !session.keySent) return;
         session.accepted = true;
         final sender = clients[session.senderClientId];
         if (sender != null) {
@@ -335,7 +361,12 @@ class RelayWsHandler {
         if (session == null || session.senderClientId != clientId) return;
         final receiver = clients[session.receiverClientId];
         if (receiver != null) {
-          send(receiver.ws, {'type': 'send-complete', 'transferId': transferId}, receiver.cipher);
+          // e2e.final: marcador cifrado de extremo a extremo; se reenvía tal cual.
+          send(receiver.ws, {
+            'type': 'send-complete',
+            'transferId': transferId,
+            'e2e': {'final': _e2eField(msg, 'final')},
+          }, receiver.cipher);
         }
         transfers.remove(transferId);
     }
@@ -396,6 +427,24 @@ class RelayWsHandler {
         AppLogger.instance.warn('relay_ws_handler: envío fallido: $e');
       }
     });
+  }
+
+  static String? _e2eField(Map<String, dynamic> msg, String key) {
+    final obj = msg['e2e'];
+    if (obj is! Map) return null;
+    final value = obj[key];
+    return value is String ? value : null;
+  }
+
+  /// base64 de una clave P-256 sin comprimir (65 bytes).
+  static bool _validPublicKey(String? b64) {
+    if (b64 == null) return false;
+    try {
+      final raw = base64.decode(b64);
+      return raw.length == 65 && raw[0] == 0x04;
+    } catch (_) {
+      return false;
+    }
   }
 
   static String? _cleanName(Object? value) {

@@ -47,16 +47,33 @@ class RelayAuth {
     return token;
   }
 
-  /// Check if a request has a valid session token.
-  ///
-  /// El token en query string (`?token=`) solo se acepta si
-  /// [allowQueryToken] es true (descargas abiertas desde un enlace del
-  /// navegador, donde no se pueden mandar cabeceras).
-  bool isAuthorized(HttpRequest req, {bool allowQueryToken = false}) {
-    final token = req.headers.value('x-srvfiles-token') ??
-        (allowQueryToken ? req.uri.queryParameters['token'] : null) ??
-        '';
-    return isValidToken(token);
+  /// Check if a request has a valid session token (header only: el token de
+  /// sesión nunca se acepta en la URL).
+  bool isAuthorized(HttpRequest req) =>
+      isValidToken(req.headers.value('x-srvfiles-token') ?? '');
+
+  // ─── Link tokens (descargas y vistas previas) ─────────────────────
+
+  static const linkTokenTtl = Duration(minutes: 10);
+  final Map<String, ({String fileName, DateTime expiry})> _linkTokens = {};
+
+  /// Token para URLs (<a>, <img>, <video>) que autoriza solo [fileName] por
+  /// unos minutos. Se puede usar varias veces (el video pide rangos).
+  String createLinkToken(String fileName, String token) {
+    final now = DateTime.now();
+    _linkTokens.removeWhere((_, v) => v.expiry.isBefore(now));
+    _linkTokens[token] = (fileName: fileName, expiry: now.add(linkTokenTtl));
+    return token;
+  }
+
+  bool isValidLinkToken(String token, String fileName) {
+    final entry = _linkTokens[token];
+    if (entry == null) return false;
+    if (entry.expiry.isBefore(DateTime.now())) {
+      _linkTokens.remove(token);
+      return false;
+    }
+    return entry.fileName == fileName;
   }
 
   /// Handle POST /api/auth — validate PIN, issue session token.
@@ -114,6 +131,7 @@ class RelayAuth {
   /// Clear all state (for server mode stop).
   void clear() {
     _sessions.clear();
+    _linkTokens.clear();
     rateLimits.clear();
     _globalFailures.clear();
     _globalBlockedUntil = DateTime(0);

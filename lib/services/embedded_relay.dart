@@ -233,18 +233,27 @@ class EmbeddedRelay {
       if (path == '/api/auth' && method == 'POST') {
         return _auth.handleAuth(req, _generateUuid);
       }
-      // Las descargas aceptan ?token= porque se abren como enlaces del navegador.
-      final isDownload = path.startsWith('/api/files/download/') && method == 'GET';
-      if (!_auth.isAuthorized(req, allowQueryToken: isDownload)) {
+      // Descargas y vistas previas: cabecera o token de enlace (?dl=) emitido
+      // para ese archivo (el navegador no manda cabeceras en <a>/<img>/<video>).
+      for (final (prefix, inline) in [('/api/files/download/', false), ('/api/files/preview/', true)]) {
+        if (path.startsWith(prefix) && method == 'GET') {
+          final name = _decodeName(path, prefix);
+          if (name == null) return _json(req, HttpStatus.badRequest, {'error': 'Nombre inválido'});
+          final link = req.uri.queryParameters['dl'] ?? '';
+          if (!_auth.isAuthorized(req) && !_auth.isValidLinkToken(link, name)) {
+            return _json(req, HttpStatus.unauthorized, {'error': 'Unauthorized'});
+          }
+          return _httpHandler.handleDownload(req, name, inline: inline);
+        }
+      }
+      if (!_auth.isAuthorized(req)) {
         return _json(req, HttpStatus.unauthorized, {'error': 'Unauthorized'});
       }
       if (path == '/api/files' && method == 'GET') return _httpHandler.handleListFiles(req);
       if (path == '/api/files/upload' && method == 'POST') return _httpHandler.handleUpload(req);
       if (path == '/api/files/stats' && method == 'GET') return _httpHandler.handleStats(req);
-      if (isDownload) {
-        final name = _decodeName(path, '/api/files/download/');
-        if (name == null) return _json(req, HttpStatus.badRequest, {'error': 'Nombre inválido'});
-        return _httpHandler.handleDownload(req, name);
+      if (path == '/api/files/link' && method == 'POST') {
+        return _httpHandler.handleLink(req, (name) => _auth.createLinkToken(name, _generateUuid()));
       }
       if (path.startsWith('/api/files/') && method == 'DELETE') {
         final name = _decodeName(path, '/api/files/');
@@ -280,6 +289,7 @@ class EmbeddedRelay {
               'ip': c.ip,
               'deviceType': c.deviceType,
               'isOwner': c.isOwner,
+              'e2e': c.e2e,
             })
         .toList();
     final msg = {'type': 'clients', 'clients': list};

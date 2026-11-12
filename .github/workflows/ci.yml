@@ -28,3 +28,43 @@ jobs:
 
       - name: Run tests
         run: flutter test
+
+  # La app móvil contra el backend Go real de srvfiles_web: protocolo y cifrado E2E.
+  interop:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout srvfiles_web
+        uses: actions/checkout@v4
+        with:
+          repository: dotdeivid/srvfiles
+          path: srvfiles_web
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: srvfiles_web/backend/go.mod
+          cache-dependency-path: srvfiles_web/backend/go.sum
+
+      - name: Start backend
+        working-directory: srvfiles_web/backend
+        run: |
+          go build -o /tmp/srvfiles ./cmd/server
+          mkdir -p /tmp/srv/{uploads,certs,logs}
+          PORT=3901 HTTPS_PORT=3902 APP_ENV=production UPLOADS_DIR=/tmp/srv/uploads \
+            CERTS_DIR=/tmp/srv/certs LOGS_DIR=/tmp/srv/logs /tmp/srvfiles &
+          for i in $(seq 1 30); do curl -sf http://localhost:3901/api/health && break; sleep 1; done
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.41.7'
+          channel: 'stable'
+          cache: true
+
+      - run: flutter pub get
+
+      - name: Interop test
+        env:
+          SRVFILES_INTEROP_URL: http://localhost:3901
+        run: flutter test test/interop_test.dart

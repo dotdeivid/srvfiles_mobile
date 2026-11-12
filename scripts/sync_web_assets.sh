@@ -15,4 +15,5 @@ fi
 rm -rf "$APP_DIR/assets/www"
 mkdir -p "$APP_DIR/assets/www"
 cp -R "$WEB_DIR/frontend/dist/." "$APP_DIR/assets/www/"
+touch "$APP_DIR/assets/www/assets/.gitkeep"
 echo "assets/www actualizado desde $WEB_DIR ($(git -C "$WEB_DIR" rev-parse --short HEAD 2>/dev/null || echo 'sin git'))"

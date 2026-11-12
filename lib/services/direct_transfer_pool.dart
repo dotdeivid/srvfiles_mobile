@@ -8,7 +8,10 @@ import 'app_logger.dart';
 class DirectPeerConnection {
   final TransferService service;
   final String targetClientId;
-  const DirectPeerConnection({required this.service, required this.targetClientId});
+
+  /// true si el dueño del relay soporta cifrado de extremo a extremo.
+  final bool targetE2E;
+  const DirectPeerConnection({required this.service, required this.targetClientId, this.targetE2E = false});
 }
 
 /// Pool de conexiones WebSocket a relays remotos para envío directo.
@@ -49,6 +52,7 @@ class DirectTransferPool {
       return DirectPeerConnection(
         service: existing.service,
         targetClientId: existing.targetClientId,
+        targetE2E: existing.targetE2E,
       );
     }
 
@@ -58,7 +62,7 @@ class DirectTransferPool {
 
     AppLogger.instance.info('[DirectTransferPool] opening new connection to $targetUrl');
     final service = TransferService();
-    final completer = Completer<String?>();
+    final completer = Completer<TransferClient?>();
     String? myClientId;
 
     onConnectionOpened?.call(service);
@@ -70,7 +74,7 @@ class DirectTransferPool {
     service.onClientsUpdate = (clients) {
       if (completer.isCompleted || myClientId == null) return;
       final target = _findRelayOwner(clients, myClientId);
-      if (target != null) completer.complete(target.clientId);
+      if (target != null) completer.complete(target);
     };
 
     service.onDisconnected = () {
@@ -93,14 +97,14 @@ class DirectTransferPool {
 
     service.connect(ApiConfig(targetUrl));
 
-    String? targetClientId;
+    TransferClient? target;
     try {
-      targetClientId = await completer.future.timeout(const Duration(seconds: 5));
+      target = await completer.future.timeout(const Duration(seconds: 5));
     } catch (e) {
       AppLogger.instance.warn('[DirectTransferPool] connection timeout: $e');
     }
 
-    if (targetClientId == null) {
+    if (target == null) {
       AppLogger.instance.warn('[DirectTransferPool] could not resolve relay owner for $targetUrl');
       service.dispose();
       return null;
@@ -110,12 +114,13 @@ class DirectTransferPool {
 
     final entry = _PoolEntry(
       service: service,
-      targetClientId: targetClientId,
+      targetClientId: target.clientId,
+      targetE2E: target.e2e,
       onTimeout: () => _onIdle(targetUrl),
     );
     _pool[targetUrl] = entry;
 
-    return DirectPeerConnection(service: service, targetClientId: targetClientId);
+    return DirectPeerConnection(service: service, targetClientId: target.clientId, targetE2E: target.e2e);
   }
 
   /// Reinicia el timer de inactividad de una conexión (llamar después de una transferencia).
@@ -162,12 +167,14 @@ TransferClient? _findRelayOwner(List<TransferClient> clients, String? myId) {
 class _PoolEntry {
   final TransferService service;
   final String targetClientId;
+  final bool targetE2E;
   Timer? _timer;
   final void Function() onTimeout;
 
   _PoolEntry({
     required this.service,
     required this.targetClientId,
+    required this.targetE2E,
     required this.onTimeout,
   }) {
     resetTimer();

@@ -1,0 +1,1 @@
+import{j as e}from"./react-vendor-D8DLBrxy.js";import{M as i,a as r,D as s,d as o}from"./vidstack-VxWfxSuJ.js";function l({src:a}){return e.jsx("div",{className:"preview-media-wrap",children:e.jsxs(i,{src:a,className:"preview-video-player",children:[e.jsx(r,{}),e.jsx(s,{icons:o})]})})}export{l as VideoPreview};

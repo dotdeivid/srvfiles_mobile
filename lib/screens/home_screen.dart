@@ -90,9 +90,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       notificationService: _notificationService,
       receivedFilesService: _receivedFilesService,
       showSnackBar: _showSnackBar,
-      showIncomingDialog: (req, dismissed) async {
+      showIncomingDialog: (req, sas, dismissed) async {
         if (!mounted) return null;
-        return IncomingTransferDialog.show(context, req, dismissed: dismissed);
+        return IncomingTransferDialog.show(context, req, sas: sas, dismissed: dismissed);
       },
       onAuthRequired: _handleAuthRequired,
       onFilesChanged: _onFilesChanged,
@@ -429,6 +429,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (!mounted) return;
     if (conn == null) {
       _showSnackBar('No se pudo conectar con ${device.appName}', isError: true);
+      return;
+    }
+    if (!conn.targetE2E) {
+      _showSnackBar('${device.appName} necesita actualizar SrvFiles para recibir archivos cifrados', isError: true);
       return;
     }
 

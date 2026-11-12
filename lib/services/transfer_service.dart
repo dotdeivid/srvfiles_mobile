@@ -7,6 +7,7 @@ import '../models/transfer_client.dart';
 import '../models/transfer_request.dart';
 import 'app_logger.dart';
 import 'crypto_service.dart';
+import 'e2e_service.dart';
 
 /// Tamaño de chunk: 256 KB — mismo que el frontend web.
 const int chunkSize = 256 * 1024;
@@ -56,7 +57,11 @@ class TransferService {
   void Function(String transferId)? onSendAccept;
   void Function(String transferId, String? reason)? onSendReject;
   void Function(String transferId)? onSendCancel;
-  void Function(String transferId)? onSendComplete;
+  /// [finalMarker]: marcador E2E cifrado (e2e.final) que manda el emisor.
+  void Function(String transferId, String? finalMarker)? onSendComplete;
+
+  /// Clave pública E2E del receptor (solo le llega al emisor).
+  void Function(String transferId, String publicKey)? onSendKey;
   void Function(String transferId, Uint8List data)? onBinaryChunk;
   void Function()? onDisconnected;
   void Function()? onFilesChanged;
@@ -328,9 +333,15 @@ class TransferService {
           final id = msg['transferId'] as String?;
           if (id != null) onSendCancel?.call(id);
 
+        case 'send-key':
+          final id = msg['transferId'] as String?;
+          final key = msg['publicKey'] as String?;
+          if (id != null && key != null) onSendKey?.call(id, key);
+
         case 'send-complete':
           final id = msg['transferId'] as String?;
-          if (id != null) onSendComplete?.call(id);
+          final finalMarker = (msg['e2e'] as Map?)?['final'] as String?;
+          if (id != null) onSendComplete?.call(id, finalMarker);
 
         case 'files-changed':
           onFilesChanged?.call();
@@ -414,8 +425,9 @@ class TransferService {
   }
 
   /// Registra este cliente en el servidor con un nombre.
+  /// `e2e: 1` anuncia que este cliente cifra de extremo a extremo (protocolo v2).
   void register(String appName) {
-    _sendJson({'type': 'hello', 'appName': appName, 'deviceType': 'mobile'});
+    _sendJson({'type': 'hello', 'appName': appName, 'deviceType': 'mobile', 'e2e': 1});
   }
 
   /// Notifica si este cliente está disponible para recibir archivos.
@@ -430,6 +442,7 @@ class TransferService {
     required int fileSize,
     required String mimeType,
     required String transferId,
+    required String e2ePublicKey,
   }) {
     _sendJson({
       'type': 'send-request',
@@ -438,7 +451,13 @@ class TransferService {
       'fileSize': fileSize,
       'mimeType': mimeType,
       'transferId': transferId,
+      'e2e': {'publicKey': e2ePublicKey},
     });
+  }
+
+  /// Receptor → emisor: clave pública E2E del receptor.
+  void sendKey(String transferId, String publicKey) {
+    _sendJson({'type': 'send-key', 'transferId': transferId, 'publicKey': publicKey});
   }
 
   /// Acepta una transferencia entrante.
@@ -467,15 +486,19 @@ class TransferService {
 
   // ─── Envío de archivo en chunks ──────────────────────────────────
 
-  /// Envía [file] como chunks binarios de 256 KB, cifrados si hay sesión activa.
+  /// Envía [file] en chunks de 256 KB, cada uno cifrado de extremo a extremo
+  /// con su índice ([e2e]) y además con la clave del canal si la hay.
   ///
   /// Lee el archivo en streaming y espera cuando el socket está saturado, así
-  /// que la memoria usada no depende del tamaño del archivo. Lanza
+  /// que la memoria usada no depende del tamaño del archivo. Al final manda
+  /// `send-complete` con el marcador final cifrado. Lanza
   /// [TransferAbortedException] si [cancelToken] se cancela o la conexión se
   /// cierra a mitad de envío; en ese caso no se envía `send-complete`.
   Future<void> sendFile({
     required String transferId,
     required File file,
+    required E2ESession e2e,
+    String? fileName,
     CancelToken? cancelToken,
     void Function(double progress)? onProgress,
   }) async {
@@ -485,6 +508,7 @@ class TransferService {
     final total = await file.length();
     final generation = _generation;
     var sent = 0;
+    var index = 0;
 
     void checkAlive() {
       if (cancelToken?.isCancelled ?? false) {
@@ -508,10 +532,13 @@ class TransferService {
         final read = await raf.readInto(buffer);
         if (read <= 0) break;
 
-        // Construir frame: header(36) + data
-        final frame = Uint8List(transferIdLength + read);
+        final sealed = await e2e.encryptChunk(index, Uint8List.sublistView(buffer, 0, read));
+        index++;
+
+        // Frame: [transferId en claro para que el relay enrute][chunk cifrado E2E]
+        final frame = Uint8List(transferIdLength + sealed.length);
         frame.setRange(0, transferIdLength, idBytes);
-        frame.setRange(transferIdLength, frame.length, buffer);
+        frame.setRange(transferIdLength, frame.length, sealed);
 
         // Esperar a que salgan los JSON pendientes para no desordenar.
         await _sendQueue;
@@ -526,7 +553,12 @@ class TransferService {
     }
 
     checkAlive();
-    _sendJson({'type': 'send-complete', 'transferId': transferId});
+    final finalMarker = await e2e.encryptFinal(
+      chunks: index,
+      size: total,
+      name: fileName ?? file.uri.pathSegments.last,
+    );
+    _sendJson({'type': 'send-complete', 'transferId': transferId, 'e2e': {'final': finalMarker}});
   }
 
   void _closeSocket() {

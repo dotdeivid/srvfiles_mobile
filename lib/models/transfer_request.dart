@@ -6,6 +6,9 @@ class IncomingTransferRequest {
   final int fileSize;
   final String mimeType;
 
+  /// Clave pública E2E del emisor (base64), o '' si no la mandó.
+  final String senderPublicKey;
+
   const IncomingTransferRequest({
     required this.transferId,
     required this.from,
@@ -13,6 +16,7 @@ class IncomingTransferRequest {
     required this.fileName,
     required this.fileSize,
     required this.mimeType,
+    this.senderPublicKey = '',
   });
 
   factory IncomingTransferRequest.fromJson(Map<String, dynamic> json) =>
@@ -23,5 +27,6 @@ class IncomingTransferRequest {
         fileName: (json['fileName'] as String?) ?? '',
         fileSize: (json['fileSize'] as num?)?.toInt() ?? 0,
         mimeType: (json['mimeType'] as String?) ?? 'application/octet-stream',
+        senderPublicKey: ((json['e2e'] as Map?)?['publicKey'] as String?) ?? '',
       );
 }

@@ -1,0 +1,46 @@
+{
+  "chunks": [
+    {
+      "ciphertext": "aamb7hiP/ZAM+LOtV+mEmtGFy2wtyXTsTeZ1ndu2ue50wpI02ndY",
+      "index": 0,
+      "plaintext": "aG9sYSwgbXVuZG8g4oCUIGNodW5rIDA="
+    },
+    {
+      "ciphertext": "zmVwQ/Pnp9Cc/g6E62KEOTdScCo/",
+      "index": 1,
+      "plaintext": "AAECA/8="
+    }
+  ],
+  "description": "Vectores de prueba del cifrado de extremo a extremo de SrvFiles (ver docs/protocol.md). Go, la web y la app móvil deben reproducirlos exactamente.",
+  "final": {
+    "ciphertext": "VoRWLLCT0Epn1XfS5ZkzoSFmhIVBaj2RNzOYJgiPbJ7zYwBP3t38UCs4VLFaRPcjA2Ruv4ZW7b4=",
+    "index": 2,
+    "plaintext": "{\"chunks\":2,\"size\":26,\"name\":\"año.txt\"}"
+  },
+  "keyHex": "79d3eefa110555e18c4df62f3495f1ba7a54a4f2712b7834cda271627d72149c",
+  "receiver": {
+    "jwk": {
+      "crv": "P-256",
+      "d": "USa2y_Yrq3cGuE58W3v2tFTJJba0guqMixLNVr8gW0M",
+      "kty": "EC",
+      "x": "PAAuwYDs6KjwNh4-PwBSlTFbRBvr1spkCecT4E4wnLc",
+      "y": "sqNNxwbxQB6rv80JDRzNh-NQDj6pi7ZCrulK6STxWAQ"
+    },
+    "privateHex": "5126b6cbf62bab7706b84e7c5b7bf6b454c925b6b482ea8c8b12cd56bf205b43",
+    "publicKey": "BDwALsGA7Oio8DYePj8AUpUxW0Qb69bKZAnnE+BOMJy3sqNNxwbxQB6rv80JDRzNh+NQDj6pi7ZCrulK6STxWAQ="
+  },
+  "sas": "484688",
+  "sender": {
+    "jwk": {
+      "crv": "P-256",
+      "d": "Ksrd7ye6UlHPWSnuoepu6CE1b4I-O4vvffsHjJUUv_g",
+      "kty": "EC",
+      "x": "8L-0SEBQDMTlJXbr9Tqm7Tl-ItQVqHIJ8W0c4oia2sc",
+      "y": "pOVHDY4ozu348qzQ1Z6x_MQNkKmwHFV7QkgcTXezdtk"
+    },
+    "privateHex": "2acaddef27ba5251cf5929eea1ea6ee821356f823e3b8bef7dfb078c9514bff8",
+    "publicKey": "BPC/tEhAUAzE5SV26/U6pu05fiLUFahyCfFtHOKImtrHpOVHDY4ozu348qzQ1Z6x/MQNkKmwHFV7QkgcTXezdtk="
+  },
+  "sharedSecretHex": "27ee138370957327b658aad299d51a4a991999550b1c7f2ce16c64e62ddda28c",
+  "transferId": "11111111-2222-4333-8444-555555555555"
+}

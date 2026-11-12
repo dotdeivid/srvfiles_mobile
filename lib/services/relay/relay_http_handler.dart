@@ -89,7 +89,28 @@ class RelayHttpHandler {
     if (savedNames.isNotEmpty) onFilesChanged?.call();
   }
 
-  Future<void> handleDownload(HttpRequest req, String fileName) async {
+  /// POST /api/files/link {"name": "..."} → {"token", "expiresIn"}: token de
+  /// enlace para descargar o previsualizar solo ese archivo por unos minutos.
+  Future<void> handleLink(HttpRequest req, String Function(String fileName) createToken) async {
+    final store = storage;
+    if (store == null) return _unavailable(req);
+    String? name;
+    try {
+      final body = jsonDecode(await utf8.decodeStream(req)) as Map<String, dynamic>;
+      name = body['name'] as String?;
+    } catch (_) {}
+    if (name == null || await store.getFile(name) == null) {
+      _json(req, HttpStatus.notFound, {'error': 'Archivo no encontrado'});
+      return;
+    }
+    _json(req, HttpStatus.ok, {'token': createToken(name), 'expiresIn': 600});
+  }
+
+  /// Descarga ([inline] = false) o vista previa ([inline] = true).
+  ///
+  /// En la vista previa, HTML/XML/JS se sirven como texto plano y todo menos
+  /// el PDF lleva CSP sandbox: un archivo subido no puede ejecutar scripts.
+  Future<void> handleDownload(HttpRequest req, String fileName, {bool inline = false}) async {
     final store = storage;
     if (store == null) return _unavailable(req);
     final file = await store.getFile(fileName);
@@ -98,13 +119,21 @@ class RelayHttpHandler {
       return;
     }
     final length = await file.length();
-    final mimeType = lookupMimeType(fileName) ?? 'application/octet-stream';
+    var mimeType = lookupMimeType(fileName) ?? 'application/octet-stream';
     final res = req.response;
+    if (inline && RegExp(r'html|xml|javascript').hasMatch(mimeType)) {
+      mimeType = 'text/plain; charset=utf-8';
+    }
     res.headers
       ..set(HttpHeaders.contentTypeHeader, mimeType)
       ..set(HttpHeaders.acceptRangesHeader, 'bytes')
       ..set('X-Content-Type-Options', 'nosniff')
-      ..set('content-disposition', _contentDisposition(fileName));
+      ..set('Referrer-Policy', 'no-referrer')
+      ..set('content-disposition', _contentDisposition(fileName, inline: inline));
+    if (!mimeType.startsWith('application/pdf')) {
+      res.headers.set('Content-Security-Policy',
+          "sandbox; default-src 'none'; img-src 'self'; media-src 'self'; style-src 'unsafe-inline'");
+    }
 
     // Soporte básico de Range (un solo rango) para reanudar y para video.
     final range = _parseRange(req.headers.value(HttpHeaders.rangeHeader), length);
@@ -243,9 +272,9 @@ class RelayHttpHandler {
   }
 
   /// `attachment` con nombre ASCII de respaldo y `filename*` en UTF-8 (RFC 6266).
-  static String _contentDisposition(String fileName) {
+  static String _contentDisposition(String fileName, {bool inline = false}) {
     final ascii = fileName.replaceAll(RegExp(r'[^\x20-\x7e]|["\\]'), '_');
-    return 'attachment; filename="$ascii"; '
+    return '${inline ? 'inline' : 'attachment'}; filename="$ascii"; '
         "filename*=UTF-8''${Uri.encodeComponent(fileName)}";
   }
 

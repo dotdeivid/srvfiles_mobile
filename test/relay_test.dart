@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:srvfiles_mobile/services/e2e_service.dart';
 import 'package:srvfiles_mobile/services/embedded_relay.dart';
 import 'package:srvfiles_mobile/services/mobile_server_storage_service.dart';
 
@@ -108,10 +109,11 @@ void main() {
       expect((await send('POST', '/api/auth', json: {'pin': relay.currentPin})).status, 429);
     });
 
-    test('API requires a header token; query token only works for downloads', () async {
+    test('the session token only works in the header, never in the URL', () async {
       expect((await send('GET', '/api/files')).status, 401);
       final token = await login();
       expect((await send('GET', '/api/files?token=$token')).status, 401);
+      expect((await send('GET', '/api/files/download/x.bin?token=$token')).status, 401);
       expect((await send('GET', '/api/files', token: token)).status, 200);
     });
 
@@ -124,8 +126,14 @@ void main() {
           as Map<String, dynamic>;
       expect((list['files'] as List).single['name'], 'año informe.bin');
 
+      // Los enlaces del navegador usan un token de un solo archivo (?dl=).
+      final link = jsonDecode((await send('POST', '/api/files/link', token: token, json: {'name': 'año informe.bin'})).body)
+          as Map<String, dynamic>;
+      final dl = link['token'] as String;
+      expect((await send('GET', '/api/files/download/otro.bin?dl=$dl')).status, 401);
+
       final path = '/api/files/download/${Uri.encodeComponent('año informe.bin')}';
-      final req = await http.getUrl(Uri.parse('${base()}$path?token=$token'));
+      final req = await http.getUrl(Uri.parse('${base()}$path?dl=$dl'));
       req.headers.set(HttpHeaders.rangeHeader, 'bytes=10-19');
       final res = await req.close();
       final partial = await res.fold<List<int>>([], (a, b) => a..addAll(b));
@@ -185,7 +193,7 @@ void main() {
           bin.add(data);
         }
       });
-      ws.add(jsonEncode({'type': 'hello', 'appName': name}));
+      ws.add(jsonEncode({'type': 'hello', 'appName': name, 'e2e': 1}));
       final id = await welcome.future.timeout(const Duration(seconds: 3));
       return (ws: ws, msgs: msgs, bin: bin, id: id);
     }
@@ -198,7 +206,21 @@ void main() {
     String request(String to, String id) => jsonEncode({
           'type': 'send-request', 'to': to, 'fileName': 'a.bin', 'fileSize': 3,
           'mimeType': 'application/octet-stream', 'transferId': id,
+          'e2e': {'publicKey': E2EKeyPair.generate().publicKey},
         });
+
+    String sendKey(String id) =>
+        jsonEncode({'type': 'send-key', 'transferId': id, 'publicKey': E2EKeyPair.generate().publicKey});
+
+    test('requests without an E2E key are rejected', () async {
+      final sender = await join('Sender');
+      final receiver = await join('Receiver');
+      sender.ws.add(jsonEncode({'type': 'send-request', 'to': receiver.id, 'transferId': 'tx-plain'}));
+      await settle();
+      expect(sender.msgs.where((m) => m['type'] == 'send-reject' && m['reason'] == 'e2e-required'), hasLength(1));
+      await sender.ws.close();
+      await receiver.ws.close();
+    });
 
     test('client list is broadcast on join and leave', () async {
       final a = await join('A');
@@ -230,8 +252,15 @@ void main() {
       await settle();
       expect(receiver.bin, isEmpty);
 
+      // Aceptar sin mandar la clave E2E no habilita nada.
       receiver.ws.add(jsonEncode({'type': 'send-accept', 'transferId': id}));
       await settle();
+      expect(sender.msgs.where((m) => m['type'] == 'send-accept'), isEmpty);
+
+      receiver.ws.add(sendKey(id));
+      receiver.ws.add(jsonEncode({'type': 'send-accept', 'transferId': id}));
+      await settle();
+      expect(sender.msgs.where((m) => m['type'] == 'send-key'), hasLength(1));
       expect(sender.msgs.where((m) => m['type'] == 'send-accept'), hasLength(1));
 
       intruder.ws.add(frame(id));
@@ -262,6 +291,7 @@ void main() {
       final receiver = await join('Receiver');
       sender.ws.add(request(receiver.id, 'tx-drop'));
       await settle();
+      receiver.ws.add(sendKey('tx-drop'));
       receiver.ws.add(jsonEncode({'type': 'send-accept', 'transferId': 'tx-drop'}));
       await settle();
       await sender.ws.close();

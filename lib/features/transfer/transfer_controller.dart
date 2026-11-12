@@ -10,6 +10,7 @@ import '../../models/transfer_request.dart';
 import '../../models/active_transfer.dart';
 import '../../services/transfer_service.dart';
 import '../../services/device_name_service.dart';
+import '../../services/e2e_service.dart';
 import '../../services/notification_service.dart';
 import '../../services/received_files_service.dart';
 import '../../services/app_logger.dart';
@@ -20,10 +21,13 @@ import 'pending_send.dart';
 /// Callback typedefs for UI events that need scaffolding context.
 typedef ShowSnackBar = void Function(String message, {bool isError, String? actionLabel, VoidCallback? onAction});
 
-/// Muestra el diálogo de transferencia entrante. Debe cerrarse solo (con
-/// null) cuando [dismissed] se completa: el emisor canceló o venció el plazo.
+/// Muestra el diálogo de transferencia entrante con el código de
+/// verificación [sas]; el usuario solo puede aceptar confirmando que coincide.
+/// Debe cerrarse solo (con null) cuando [dismissed] se completa: el emisor
+/// canceló o venció el plazo.
 typedef ShowIncomingDialog = Future<bool?> Function(
   IncomingTransferRequest request,
+  String sas,
   Future<void> dismissed,
 );
 typedef OnAuthRequired = void Function();
@@ -37,6 +41,10 @@ const _incomingRequestTimeout = Duration(seconds: 60);
 /// Las transferencias pueden llegar por la conexión principal o por una
 /// conexión del pool de envío directo: cada evento trae su [TransferService] y
 /// las respuestas (aceptar, rechazar, cancelar) salen por ese mismo servicio.
+///
+/// Cifrado de extremo a extremo obligatorio: cada transferencia negocia su
+/// propia clave entre emisor y receptor (e2e_service.dart). El relay nunca
+/// puede descifrar el contenido.
 class TransferController extends ChangeNotifier {
   TransferController({
     required this.transferService,
@@ -126,11 +134,12 @@ class TransferController extends ChangeNotifier {
   /// Engancha los eventos de transferencia de [service] (conexión principal o
   /// del pool) a este controller.
   void attachService(TransferService service) {
-    service.onSendRequest = (request) => _onSendRequest(service, request);
+    service.onSendRequest = (request) => unawaited(_onSendRequest(service, request));
     service.onSendAccept = (id) => handleSendAccept(id, service: service);
     service.onSendReject = (id, reason) => _onSendReject(service, id, reason);
     service.onSendCancel = (id) => _onSendCancel(service, id);
-    service.onSendComplete = (id) => _onReceiveComplete(service, id);
+    service.onSendKey = (id, key) => _onSendKey(service, id, key);
+    service.onSendComplete = (id, finalMarker) => _onReceiveComplete(service, id, finalMarker);
     service.onBinaryChunk = (id, data) => handleBinaryChunk(id, data, service: service);
   }
 
@@ -176,6 +185,13 @@ class TransferController extends ChangeNotifier {
     if (result == null || result.files.isEmpty) return;
 
     final via = service ?? transferService;
+    if (via == transferService) {
+      final target = onlineClients.where((c) => c.clientId == targetClientId).firstOrNull;
+      if (target != null && !target.e2e) {
+        showSnackBar?.call('$peerName necesita actualizar SrvFiles para recibir archivos cifrados', isError: true);
+        return;
+      }
+    }
     for (final f in result.files) {
       if (f.path == null) continue;
       _sendQueue.add(_QueuedFile(
@@ -207,12 +223,14 @@ class TransferController extends ChangeNotifier {
     }
 
     final transferId = FilesController.generateTransferId();
+    final keyPair = E2EKeyPair.generate();
     _pendingSend = PendingSend(
       transferId: transferId,
       file: next.file,
+      fileName: next.fileName,
       peerId: next.peerId,
       service: next.service,
-      cancelToken: CancelToken(),
+      keyPair: keyPair,
     );
 
     activeTransfer = ActiveTransfer(
@@ -233,7 +251,36 @@ class TransferController extends ChangeNotifier {
       fileSize: fileSize,
       mimeType: lookupMimeType(next.fileName) ?? 'application/octet-stream',
       transferId: transferId,
+      e2ePublicKey: keyPair.publicKey,
     );
+  }
+
+  /// Emisor: llegó la clave del receptor → derivar la sesión y mostrar el código.
+  Future<void> _onSendKey(TransferService service, String transferId, String publicKey) async {
+    final pending = _pendingSend;
+    if (pending == null || pending.transferId != transferId || pending.service != service) return;
+    if (pending.session != null) return;
+    try {
+      final session = await E2ESession.derive(
+        ownPrivateKey: pending.keyPair.privateKey,
+        peerPublicKey: publicKey,
+        senderPublicKey: pending.keyPair.publicKey,
+        receiverPublicKey: publicKey,
+        transferId: transferId,
+      );
+      if (_pendingSend != pending) return;
+      pending.session = session;
+      if (activeTransfer?.transferId == transferId) {
+        activeTransfer = activeTransfer!.copyWith(sas: session.sas);
+        _notify();
+      }
+    } catch (e) {
+      AppLogger.instance.warn('[TransferCtrl] invalid E2E key from receiver: $e');
+      service.cancel(transferId);
+      _finishSend();
+      _sendQueue.clear();
+      showSnackBar?.call('No se pudo establecer el cifrado con el destinatario', isError: true);
+    }
   }
 
   Future<void> handleSendAccept(String transferId, {TransferService? service}) async {
@@ -241,14 +288,26 @@ class TransferController extends ChangeNotifier {
     if (pending == null || pending.transferId != transferId) return;
     if (service != null && pending.service != service) return;
 
+    final session = pending.session;
+    if (session == null) {
+      // Aceptó sin intercambiar claves: no se envía nada sin cifrado E2E.
+      pending.service.cancel(transferId);
+      _finishSend();
+      _sendQueue.clear();
+      showSnackBar?.call('El destinatario no completó el cifrado de extremo a extremo', isError: true);
+      return;
+    }
+
     activeTransfer = activeTransfer?.copyWith(waiting: false);
     _notify();
 
-    final fileName = activeTransfer?.fileName ?? p.basename(pending.file.path);
+    final fileName = pending.fileName;
     try {
       await pending.service.sendFile(
         transferId: pending.transferId,
         file: pending.file,
+        e2e: session,
+        fileName: fileName,
         cancelToken: pending.cancelToken,
         onProgress: (progress) => _setProgress(transferId, (progress * 100).floor()),
       );
@@ -299,6 +358,9 @@ class TransferController extends ChangeNotifier {
       'offline' => 'El destinatario ya no está conectado',
       'busy' => 'El destinatario está ocupado con otra transferencia',
       'timeout' => 'El destinatario no respondió',
+      'e2e-required' || 'e2e-unsupported' =>
+        'El otro dispositivo necesita actualizar SrvFiles (cifrado de extremo a extremo)',
+      'e2e-unavailable' => 'El otro dispositivo abrió SrvFiles sin HTTPS y no puede recibir archivos cifrados',
       _ => 'El destinatario rechazó el envío',
     };
     showSnackBar?.call(message, isError: true);
@@ -306,16 +368,39 @@ class TransferController extends ChangeNotifier {
 
   // ─── Receive ────────────────────────────────────────────────────
 
-  void _onSendRequest(TransferService service, IncomingTransferRequest request) {
+  Future<void> _onSendRequest(TransferService service, IncomingTransferRequest request) async {
     AppLogger.instance.info(
       '[TransferCtrl] incoming transfer: ${request.fileName} from ${request.fromName}',
     );
+    if (request.senderPublicKey.isEmpty) {
+      service.reject(request.transferId, reason: 'e2e-required');
+      return;
+    }
     // Ocupado con otra transferencia: rechazar sin molestar al usuario.
     if (activeTransfer != null || _incoming.length >= 5) {
       service.reject(request.transferId, reason: 'busy');
       return;
     }
-    final entry = _IncomingRequest(request, service);
+    // La clave propia se manda enseguida: el emisor necesita el código para
+    // mostrarlo mientras el usuario decide.
+    final E2ESession session;
+    try {
+      final own = E2EKeyPair.generate();
+      session = await E2ESession.derive(
+        ownPrivateKey: own.privateKey,
+        peerPublicKey: request.senderPublicKey,
+        senderPublicKey: request.senderPublicKey,
+        receiverPublicKey: own.publicKey,
+        transferId: request.transferId,
+      );
+      service.sendKey(request.transferId, own.publicKey);
+    } catch (e) {
+      AppLogger.instance.warn('[TransferCtrl] invalid E2E key from sender: $e');
+      service.reject(request.transferId, reason: 'e2e-required');
+      return;
+    }
+    if (_disposed) return;
+    final entry = _IncomingRequest(request, service, session);
     entry.timeout = Timer(_incomingRequestTimeout, () {
       if (_incoming.remove(entry) || !entry.answered) {
         AppLogger.instance.info('[TransferCtrl] incoming request timed out');
@@ -325,7 +410,7 @@ class TransferController extends ChangeNotifier {
       }
     });
     _incoming.add(entry);
-    notificationService.showIncomingTransfer(request.fromName, request.fileName);
+    unawaited(notificationService.showIncomingTransfer(request.fromName, request.fileName));
     unawaited(_showNextIncoming());
   }
 
@@ -338,7 +423,7 @@ class TransferController extends ChangeNotifier {
     _shown[entry.request.transferId] = entry;
     bool? accepted;
     try {
-      accepted = await showIncomingDialog?.call(entry.request, entry.dismissed.future);
+      accepted = await showIncomingDialog?.call(entry.request, entry.session.sas, entry.dismissed.future);
     } finally {
       _showingIncoming = false;
       _shown.remove(entry.request.transferId);
@@ -347,7 +432,7 @@ class TransferController extends ChangeNotifier {
     if (!entry.answered) {
       entry.answered = true;
       if (accepted == true) {
-        await acceptTransfer(entry.request, service: entry.service);
+        await acceptTransfer(entry.request, session: entry.session, service: entry.service);
       } else {
         entry.service.reject(entry.request.transferId);
       }
@@ -355,7 +440,11 @@ class TransferController extends ChangeNotifier {
     unawaited(_showNextIncoming());
   }
 
-  Future<void> acceptTransfer(IncomingTransferRequest request, {TransferService? service}) async {
+  Future<void> acceptTransfer(
+    IncomingTransferRequest request, {
+    required E2ESession session,
+    TransferService? service,
+  }) async {
     final via = service ?? transferService;
     if (activeTransfer != null) {
       via.reject(request.transferId, reason: 'busy');
@@ -375,6 +464,7 @@ class TransferController extends ChangeNotifier {
     _receives[request.transferId] = ReceiveBuffer(
       sink: sink,
       service: via,
+      session: session,
       total: request.fileSize,
       fileName: request.fileName,
       mimeType: request.mimeType,
@@ -390,52 +480,80 @@ class TransferController extends ChangeNotifier {
       peerName: request.fromName,
       peerId: request.from,
       waiting: false,
+      sas: session.sas,
     );
     _notify();
 
     via.accept(request.transferId);
   }
 
+  /// Chunk cifrado E2E: se descifra con el índice que le toca (orden de
+  /// llegada) y se escribe; todo encadenado en [ReceiveBuffer.work].
   void handleBinaryChunk(String transferId, Uint8List data, {TransferService? service}) {
     final buffer = _receives[transferId];
-    if (buffer == null) return;
+    if (buffer == null || buffer.failed != null) return;
     if (service != null && buffer.service != service) return;
 
-    // Más datos de los anunciados: descartar la transferencia.
-    if (buffer.total > 0 && buffer.received + data.length > buffer.total) {
-      AppLogger.instance.warn('[TransferCtrl] received more bytes than announced');
-      buffer.service.cancel(transferId);
-      _abortReceive(transferId, 'El archivo recibido no coincide con el tamaño anunciado');
-      return;
-    }
-
-    try {
-      buffer.sink.add(data);
-    } catch (e) {
-      AppLogger.instance.error('[TransferCtrl] write failed while receiving', error: e);
-      buffer.service.cancel(transferId);
-      _abortReceive(transferId, 'No se pudo escribir el archivo (¿sin espacio?)');
-      return;
-    }
-    buffer.received += data.length;
-
-    if (buffer.total > 0) {
-      _setProgress(transferId, (buffer.received * 100 ~/ buffer.total));
-    }
+    final index = buffer.nextIndex++;
+    final sealed = Uint8List.fromList(data);
+    buffer.work = buffer.work.then((_) async {
+      if (buffer.failed != null) return;
+      Uint8List chunk;
+      try {
+        chunk = await buffer.session.decryptChunk(index, sealed);
+      } catch (_) {
+        buffer.failed = '"${buffer.fileName}": datos alterados o fuera de orden, se descartó';
+        buffer.service.cancel(transferId);
+        _abortReceive(transferId, buffer.failed!);
+        return;
+      }
+      // Más datos de los anunciados: descartar la transferencia.
+      if (buffer.received + chunk.length > buffer.total) {
+        buffer.failed = 'El archivo recibido no coincide con el tamaño anunciado';
+        buffer.service.cancel(transferId);
+        _abortReceive(transferId, buffer.failed!);
+        return;
+      }
+      try {
+        buffer.sink.add(chunk);
+      } catch (e) {
+        AppLogger.instance.error('[TransferCtrl] write failed while receiving', error: e);
+        buffer.failed = 'No se pudo escribir el archivo (¿sin espacio?)';
+        buffer.service.cancel(transferId);
+        _abortReceive(transferId, buffer.failed!);
+        return;
+      }
+      buffer.received += chunk.length;
+      if (buffer.total > 0) {
+        _setProgress(transferId, (buffer.received * 100 ~/ buffer.total));
+      }
+    });
   }
 
-  Future<void> _onReceiveComplete(TransferService service, String transferId) async {
+  Future<void> _onReceiveComplete(TransferService service, String transferId, String? finalMarker) async {
     final buffer = _receives[transferId];
     if (buffer == null || buffer.service != service) return;
-    _receives.remove(transferId);
+    await buffer.work;
+    if (_receives.remove(transferId) == null || buffer.failed != null) return; // ya abortada
 
-    if (buffer.received != buffer.total) {
+    // Marcador final autenticado por el emisor: cantidad de chunks, tamaño y nombre.
+    var intact = false;
+    try {
+      final fin = await buffer.session.decryptFinal(buffer.nextIndex, finalMarker ?? '');
+      intact = fin.chunks == buffer.nextIndex &&
+          fin.size == buffer.received &&
+          fin.size == buffer.total &&
+          fin.name == buffer.fileName;
+    } catch (_) {
+      intact = false;
+    }
+    if (!intact) {
       AppLogger.instance.warn(
-        '[TransferCtrl] incomplete transfer: ${buffer.received}/${buffer.total} bytes',
+        '[TransferCtrl] incomplete or tampered transfer: ${buffer.received}/${buffer.total} bytes',
       );
       await buffer.sink.discard();
       _clearActive(transferId);
-      showSnackBar?.call('"${buffer.fileName}" llegó incompleto y se descartó', isError: true);
+      showSnackBar?.call('"${buffer.fileName}" llegó incompleto o alterado y se descartó', isError: true);
       return;
     }
 
@@ -628,11 +746,12 @@ class _QueuedFile {
 class _IncomingRequest {
   final IncomingTransferRequest request;
   final TransferService service;
+  final E2ESession session;
   final Completer<void> dismissed = Completer<void>();
   Timer? timeout;
   bool answered = false;
 
-  _IncomingRequest(this.request, this.service);
+  _IncomingRequest(this.request, this.service, this.session);
 
   void dismiss() {
     if (!dismissed.isCompleted) dismissed.complete();

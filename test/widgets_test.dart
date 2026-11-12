@@ -99,15 +99,24 @@ void main() {
       fileName: 'video.mp4', fileSize: 52428800, mimeType: 'video/mp4',
     );
 
-    testWidgets('returns true on accept and false on reject', (tester) async {
+    ElevatedButton acceptButton(WidgetTester tester) =>
+        tester.widget<ElevatedButton>(find.widgetWithText(ElevatedButton, 'Aceptar'));
+
+    // Aceptar exige confirmar que el código de verificación coincide.
+    testWidgets('shows the verification code and only accepts after confirming it', (tester) async {
       final results = <bool?>[];
       await tester.pumpWidget(dialogHost<bool>(
-        (ctx) => IncomingTransferDialog.show(ctx, request),
+        (ctx) => IncomingTransferDialog.show(ctx, request, sas: '484688'),
         results.add,
       ));
       await tester.tap(find.text('Abrir'));
       await tester.pumpAndSettle();
       expect(find.text('PC Escritorio'), findsOneWidget);
+      expect(find.text('484 688'), findsOneWidget);
+      expect(acceptButton(tester).onPressed, isNull);
+
+      await tester.tap(find.byType(Checkbox));
+      await tester.pump();
       await tester.tap(find.text('Aceptar'));
       await tester.pumpAndSettle();
 
@@ -123,7 +132,7 @@ void main() {
       final dismissed = Completer<void>();
       final results = <bool?>[];
       await tester.pumpWidget(dialogHost<bool>(
-        (ctx) => IncomingTransferDialog.show(ctx, request, dismissed: dismissed.future),
+        (ctx) => IncomingTransferDialog.show(ctx, request, sas: '123456', dismissed: dismissed.future),
         results.add,
       ));
       await tester.tap(find.text('Abrir'));
@@ -209,7 +218,7 @@ void main() {
 
   group('OnlineClients', () {
     const me = TransferClient(clientId: 'me', appName: 'Yo', receiving: true, ip: '1');
-    const peer = TransferClient(clientId: 'p1', appName: 'Laptop', receiving: true, ip: '2');
+    const peer = TransferClient(clientId: 'p1', appName: 'Laptop', receiving: true, ip: '2', e2e: true);
 
     testWidgets('hides itself when I am the only client', (tester) async {
       await tester.pumpWidget(app(OnlineClients(
@@ -228,6 +237,16 @@ void main() {
       )));
       await tester.tap(find.text('Enviar'));
       expect(target, 'p1');
+
+      // Un cliente sin cifrado de extremo a extremo no puede recibir.
+      target = null;
+      await tester.pumpWidget(app(OnlineClients(
+        clients: const [me, TransferClient(clientId: 'old', appName: 'Viejo', receiving: true, ip: '3')],
+        myClientId: 'me', activeTransfer: null,
+        onSendFile: (id, _) => target = id, onCancelTransfer: () {},
+      )));
+      await tester.tap(find.text('Enviar'));
+      expect(target, isNull);
 
       await tester.pumpWidget(app(OnlineClients(
         clients: const [me, peer], myClientId: 'me',

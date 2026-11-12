@@ -4,6 +4,7 @@ import '../config/api_config.dart';
 import '../theme/app_colors.dart';
 import '../models/transfer_client.dart';
 import '../models/active_transfer.dart';
+import '../services/e2e_service.dart';
 import '../utils/format.dart';
 import 'pulsing_dot.dart';
 
@@ -247,7 +248,8 @@ class _ClientRow extends StatelessWidget {
                       button: true,
                       label: 'Enviar archivo a ${client.appName}',
                       child: TextButton.icon(
-                        onPressed: isOtherRow
+                        // Cifrado de extremo a extremo obligatorio.
+                        onPressed: isOtherRow || !client.e2e
                             ? null
                             : () {
                                 HapticFeedback.lightImpact();
@@ -274,16 +276,33 @@ class _ClientRow extends StatelessWidget {
           if (isThisRow && activeTransfer != null) ...[
             const SizedBox(height: AppSpacing.xs),
             if (activeTransfer!.waiting)
-              const Padding(
-                padding: EdgeInsets.only(left: 20),
-                child: Text(
-                  'Esperando respuesta...',
-                  style: TextStyle(
-                    color: AppColors.textMuted,
-                    fontSize: 11,
-                    fontStyle: FontStyle.italic,
-                  ),
-                ),
+              Padding(
+                padding: const EdgeInsets.only(left: 20),
+                child: activeTransfer!.sas == null
+                    ? const Text(
+                        'Esperando respuesta...',
+                        style: TextStyle(
+                          color: AppColors.textMuted,
+                          fontSize: 11,
+                          fontStyle: FontStyle.italic,
+                        ),
+                      )
+                    : Text.rich(
+                        TextSpan(children: [
+                          const TextSpan(text: 'Código '),
+                          TextSpan(
+                            text: E2ESession.formatSas(activeTransfer!.sas!),
+                            style: const TextStyle(
+                              fontFamily: 'monospace',
+                              fontWeight: FontWeight.w700,
+                              fontSize: 14,
+                              color: AppColors.textPrimary,
+                            ),
+                          ),
+                          TextSpan(text: ' — debe coincidir con el de ${client.appName}'),
+                        ]),
+                        style: const TextStyle(color: AppColors.textSecondary, fontSize: 11),
+                      ),
               )
             else ...[
               // Barra de progreso animada

@@ -66,6 +66,37 @@ class CryptoService {
     );
   }
 
+  // ─── Primitivas compartidas con el cifrado E2E (e2e_service.dart) ───
+
+  /// Genera un par de claves P-256 efímero. La pública va en base64 (65 bytes).
+  static ({pc.ECPrivateKey privateKey, String publicKeyB64}) generateKeyPairB64() {
+    final pair = _generateKeyPair();
+    return (privateKey: pair.privateKey, publicKeyB64: base64.encode(_encodePublicKey(pair.publicKey)));
+  }
+
+  /// Clave privada P-256 a partir de su escalar (solo para vectores de prueba).
+  static pc.ECPrivateKey privateKeyFromHex(String hex) =>
+      pc.ECPrivateKey(BigInt.parse(hex, radix: 16), _domain);
+
+  /// Clave pública base64 de una privada (solo para vectores de prueba).
+  static String publicKeyB64Of(pc.ECPrivateKey key) =>
+      base64.encode((_domain.G * key.d)!.getEncoded(false));
+
+  /// Secreto ECDH (coordenada x, 32 bytes) con la clave pública del otro lado.
+  /// Lanza ArgumentError si la clave no es un punto válido de P-256.
+  static Uint8List sharedSecret(pc.ECPrivateKey privateKey, String peerPublicKeyB64) {
+    final peerBytes = base64.decode(peerPublicKeyB64);
+    if (peerBytes.length != 65 || peerBytes[0] != 0x04) {
+      throw ArgumentError('Expected 65-byte uncompressed P-256 public key');
+    }
+    final x = _toBigInt(peerBytes.sublist(1, 33));
+    final y = _toBigInt(peerBytes.sublist(33, 65));
+    if (!_isOnCurve(x, y)) throw ArgumentError('Peer public key is not a valid P-256 point');
+    final peerKey = pc.ECPublicKey(_domain.curve.decodePoint(peerBytes)!, _domain);
+    final agreement = pc.ECDHBasicAgreement()..init(privateKey);
+    return _toBytes(agreement.calculateAgreement(peerKey), 32);
+  }
+
   // ─── Internos ──────────────────────────────────────────────────────
 
   static ({pc.ECPrivateKey privateKey, pc.ECPublicKey publicKey}) _generateKeyPair() {
@@ -96,22 +127,7 @@ class CryptoService {
     pc.ECPrivateKey privateKey,
     String peerPublicKeyB64,
   ) async {
-    final peerBytes = base64.decode(peerPublicKeyB64);
-    if (peerBytes.length != 65 || peerBytes[0] != 0x04) {
-      throw ArgumentError(
-        'Expected 65-byte uncompressed P-256 public key (0x04 prefix), got ${peerBytes.length} bytes',
-      );
-    }
-    final x = _toBigInt(peerBytes.sublist(1, 33));
-    final y = _toBigInt(peerBytes.sublist(33, 65));
-    if (!_isOnCurve(x, y)) {
-      throw ArgumentError('Peer public key is not a valid P-256 point');
-    }
-    final peerPoint = _domain.curve.decodePoint(peerBytes)!;
-    final peerKey = pc.ECPublicKey(peerPoint, _domain);
-
-    final agreement = pc.ECDHBasicAgreement()..init(privateKey);
-    final shared = _toBytes(agreement.calculateAgreement(peerKey), 32);
+    final shared = sharedSecret(privateKey, peerPublicKeyB64);
 
     final derivedKey = await _hkdf.deriveKey(
       secretKey: SecretKey(shared),
