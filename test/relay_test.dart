@@ -5,16 +5,21 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:srvfiles_mobile/services/embedded_relay.dart';
+import 'package:srvfiles_mobile/services/mobile_server_storage_service.dart';
 
 /// Relay embebido: API HTTP del modo servidor, señalización WebSocket y las
 /// reglas de seguridad que lo protegen. Clientes "crudos" (HttpClient y
 /// WebSocket sin cifrar), como los usaría un navegador o un atacante.
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
   late EmbeddedRelay relay;
   late HttpClient http;
+  late Directory tmp;
 
   setUp(() async {
+    HttpOverrides.global = null;
     SharedPreferences.setMockInitialValues({});
+    tmp = await Directory.systemTemp.createTemp('relay_test_');
     relay = EmbeddedRelay();
     await relay.start(port: 0);
     http = HttpClient();
@@ -23,6 +28,7 @@ void main() {
   tearDown(() async {
     http.close(force: true);
     await relay.stop();
+    await tmp.delete(recursive: true);
   });
 
   String base() => 'http://127.0.0.1:${relay.port}';
@@ -78,7 +84,9 @@ void main() {
   });
 
   group('server mode', () {
-    setUp(() => relay.startServerMode());
+    setUp(() => relay.startServerMode(
+          storage: MobileServerStorageService.forTesting(tmp),
+        ));
 
     test('PIN login: wrong → 401, bad JSON → 400, right → token', () async {
       expect((await send('POST', '/api/auth', json: {'pin': '000000'})).status, 401);
@@ -140,7 +148,9 @@ void main() {
     test('tokens die when server mode is turned off', () async {
       final token = await login();
       await relay.stopServerMode();
-      await relay.startServerMode();
+      await relay.startServerMode(
+        storage: MobileServerStorageService.forTesting(tmp),
+      );
       expect((await send('GET', '/api/files', token: token)).status, 401);
     });
 

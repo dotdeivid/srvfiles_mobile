@@ -126,8 +126,8 @@ class EmbeddedRelay {
   }
 
   /// Activates full server mode. Returns the generated PIN.
-  Future<String> startServerMode() async {
-    _httpHandler.storage = MobileServerStorageService();
+  Future<String> startServerMode({MobileServerStorageService? storage}) async {
+    _httpHandler.storage = storage ?? MobileServerStorageService();
     _pinService = PinService();
     _auth.clear();
     _auth.pinService = _pinService;

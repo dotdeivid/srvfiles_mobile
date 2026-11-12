@@ -157,11 +157,13 @@ void main() {
       expect(attempts, isEmpty); // menos de 6 dígitos no se envía
 
       await tester.enterText(find.byType(TextField), '000000');
+      await tester.pump();
       await tester.tap(find.text('Conectar'));
       await tester.pumpAndSettle();
       expect(find.text('PIN incorrecto'), findsOneWidget);
 
       await tester.enterText(find.byType(TextField), '123456');
+      await tester.pump();
       await tester.tap(find.text('Conectar'));
       await tester.pumpAndSettle();
       expect(result, '123456');

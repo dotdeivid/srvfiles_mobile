@@ -165,7 +165,9 @@ class TransferService {
     _ws = ws;
     _connected = true;
 
-    unawaited(ws.addStream(out.stream).catchError((Object e) {
+    unawaited(ws.addStream(out.stream).then((_) {
+      return ws.close().catchError((_) {});
+    }).catchError((Object e) {
       AppLogger.instance.debug('transfer_service.dart: addStream terminó: $e');
     }));
 
@@ -530,12 +532,17 @@ class TransferService {
   void _closeSocket() {
     _subscription?.cancel();
     _subscription = null;
-    _out?.close();
+    final out = _out;
     _out = null;
-    _ws?.close();
+    final ws = _ws;
     _ws = null;
     _connected = false;
     _markWritable();
+    if (out != null && !out.isClosed) {
+      unawaited(out.close().catchError((_) {}));
+    } else if (ws != null) {
+      unawaited(ws.close().catchError((_) {}));
+    }
   }
 
   /// Cierra la conexión WebSocket y detiene la reconexión.
