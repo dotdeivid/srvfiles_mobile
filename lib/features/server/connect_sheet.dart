@@ -69,7 +69,7 @@ class _ConnectSheetState extends State<ConnectSheet> {
       _scanning = true;
       _servers = [];
     });
-    final results = await _discovery.scanLan(isCancelled: () => !mounted);
+    final results = await _discovery.discover(isCancelled: () => !mounted);
     if (mounted) {
       setState(() {
         _servers = results;

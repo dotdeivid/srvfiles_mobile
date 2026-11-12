@@ -34,7 +34,7 @@ ServerController({required EmbeddedRelay relay, required DirectTransferPool dire
 | `void initDirectPoolCallbacks({...})` | Wires all transfer-event callbacks from the pool to the caller's handlers. |
 | `void startDirectScanning()` | Runs `scanForDirectDevices()` immediately and every 5 seconds. |
 | `void stopDirectScanning()` | Cancels the scan timer and clears `directDevices`. |
-| `Future<void> scanForDirectDevices()` | Runs `DiscoveryService().scanLan()`, updates `directDevices`. |
+| `Future<void> scanForDirectDevices({bool manual = false})` | Runs `DiscoveryService.discover(fallbackScan: manual)` and updates `directDevices`. The periodic 30 s refresh uses mDNS only; entering direct mode and the rescan button (`manual: true`) also scan the subnet if mDNS finds nothing. |
 | `Future<DirectPeerConnection?> getDirectConnection(String url, String deviceName)` | Delegates to `directPool.getConnection`. |
 | `void touchPool(String url)` | Resets the pool entry's inactivity timer. |
 

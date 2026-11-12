@@ -89,7 +89,7 @@ class _SplashScreenState extends State<SplashScreen> {
 
     AppLogger.instance.info('[Splash] starting LAN scan');
     try {
-      final servers = await _discoveryService.scanLan(isCancelled: cancelled);
+      final servers = await _discoveryService.discover(isCancelled: cancelled);
       await lastProbe;
       if (cancelled()) return;
       AppLogger.instance.info(

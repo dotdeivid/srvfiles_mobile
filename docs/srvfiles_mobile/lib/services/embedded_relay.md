@@ -33,11 +33,12 @@ Delegates work to three sub-handlers:
 
 | Method | Description |
 |---|---|
-| `void setDeviceName(String name)` | Sets the name returned by `/api/health`. |
-| `Future<void> start({int port = 3001})` | Binds the HTTP server. Tries up to 5 successive ports if the requested port is busy. Port `0` lets the OS pick a free port. |
+| `void setDeviceName(String name)` | Sets the name returned by `/api/health` and re-advertises it by mDNS if the relay is running. |
+| `Future<void> start({int port = 3001})` | Binds the HTTP server. Tries up to 5 successive ports if the requested port is busy. Port `0` lets the OS pick a free port. Then advertises the relay by mDNS (`_srvfiles._tcp`). |
 | `Future<String> startServerMode()` | Activates server mode: creates `MobileServerStorageService` and `PinService`, generates and stores the PIN, wires the pin into `RelayAuth`, and returns the plain-text PIN. |
 | `Future<void> stopServerMode()` | Deactivates server mode, clears sessions/rate limits/PIN, and disposes storage and pin service. |
-| `Future<void> stop()` | Calls `stopServerMode`, closes all WebSocket connections, and closes the `HttpServer`. |
+| `Future<void> stop()` | Stops the mDNS advertisement, calls `stopServerMode`, closes all WebSocket connections, and closes the `HttpServer`. |
+| `void notifyFilesChanged()` | Broadcasts `files-changed` (server mode only) when the shared folder changes outside the API, e.g. a P2P file was saved. |
 
 ## Key behaviors — request router (`_handleRequest`)
 

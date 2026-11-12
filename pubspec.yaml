@@ -93,6 +93,7 @@ dependencies:
 
   # Widgets Material (separados del SDK desde Flutter 3.47)
   material_ui: ^1.11.0
+  nsd: ^5.0.1
 
 dev_dependencies:
   flutter_test:

@@ -98,3 +98,9 @@ Semantics(
 ```
 
 Envuelve el widget con metadatos para lectores de pantalla (accesibilidad). El label describe lo que el lector de pantalla anunciará cuando el usuario enfoque este elemento.
+
+## Modo selección
+
+- `onSelect`: agrega "Seleccionar" al menú contextual (mantener presionado).
+- `selectionMode: true`: tocar o mantener presionado marca/desmarca (`onSelect`), se muestra un círculo de selección y se ocultan los botones de acción, que pasan a la barra de selección de `HomeScreen`.
+- `selected: true`: resalta el archivo con el color de acento.

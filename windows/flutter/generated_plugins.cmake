@@ -4,6 +4,7 @@
 
 list(APPEND FLUTTER_PLUGIN_LIST
   audioplayers_windows
+  nsd_windows
   pdfx
   url_launcher_windows
   share_plus
