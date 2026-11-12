@@ -1,0 +1,1 @@
+import{t as e}from"./react-vendor-DkjBl0lR.js";var t=e();function n({src:e,fileName:n}){return(0,t.jsxs)(`div`,{className:`preview-audio-wrap`,children:[(0,t.jsx)(`span`,{className:`preview-audio-icon`,children:`🎵`}),(0,t.jsx)(`p`,{className:`preview-audio-name`,children:n}),(0,t.jsx)(`audio`,{src:e,controls:!0,className:`preview-audio`})]})}export{n as AudioPreview};

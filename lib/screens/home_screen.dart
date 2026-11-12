@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:share_plus/share_plus.dart';
@@ -405,7 +405,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Future<void> _onShare(FileInfo file) async {
     final tempPath = await _filesCtrl.prepareShare(file);
     if (tempPath != null) {
-      await Share.shareXFiles([XFile(tempPath)]);
+      await SharePlus.instance.share(ShareParams(files: [XFile(tempPath)]));
     } else if (mounted) {
       _showSnackBar('No se pudo compartir "${file.name}"', isError: true);
     }
@@ -417,7 +417,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _showSnackBar('Todavía no hay registros de errores');
       return;
     }
-    await Share.shareXFiles([XFile(file.path)], subject: 'Registros de SrvFiles');
+    await SharePlus.instance.share(ShareParams(files: [XFile(file.path)], subject: 'Registros de SrvFiles'));
   }
 
   // ─── Send P2P (via direct pool) ───────────────────────────────────
@@ -1187,7 +1187,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     context: context,
                   )),
                   onShare: () async {
-                    await Share.shareXFiles([XFile(file.downloadUrl)]);
+                    await SharePlus.instance.share(ShareParams(files: [XFile(file.downloadUrl)]));
                   },
                   onDelete: () => _deleteReceivedFile(file),
                   downloadIcon: Icons.remove_red_eye_rounded,

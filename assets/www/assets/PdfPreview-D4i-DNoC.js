@@ -1,0 +1,1 @@
+import{t as e}from"./react-vendor-DkjBl0lR.js";var t=e();function n({src:e}){return(0,t.jsx)(`iframe`,{src:e,className:`preview-pdf`,title:`Vista previa PDF`})}export{n as PdfPreview};

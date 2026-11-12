@@ -19,7 +19,8 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 version: 1.0.0+1
 
 environment:
-  sdk: ^3.11.3
+  sdk: ^3.13.0
+  flutter: ">=3.50.0"
 
 # Dependencies specify other packages that your package needs in order to work.
 # To automatically upgrade your package dependencies to the latest versions
@@ -32,43 +33,43 @@ dependencies:
     sdk: flutter
 
   # Logging
-  logger: ^2.4.0
+  logger: ^2.8.0
 
   # HTTP para la API REST
-  http: ^1.2.1
+  http: ^1.6.0
 
   # Selector de archivos (galería, documentos, etc.)
-  file_picker: ^8.0.3
+  file_picker: ^13.3.3
 
   # Guardar archivos descargados en el dispositivo
-  path_provider: ^2.1.3
-  open_filex: ^4.3.4
+  path_provider: ^2.1.6
+  open_filex: ^5.0.0
 
   # Código QR (para mostrar la URL del servidor)
   qr_flutter: ^4.1.0
 
   # Compartir archivos con otras apps del celular
-  share_plus: ^9.0.0
+  share_plus: ^13.3.1
 
   # Persistencia local (nombre de dispositivo, última IP)
-  shared_preferences: ^2.2.3
+  shared_preferences: ^2.5.6
 
   # Tipografías del design system (Outfit, Inter)
-  google_fonts: ^6.2.1
+  google_fonts: ^9.0.0
 
   # Formateo de fechas localizado (es-ES)
-  intl: ^0.19.0
+  intl: ^0.20.3
 
   # Notificaciones locales (descarga/transferencia completada)
-  flutter_local_notifications: ^18.0.1
+  flutter_local_notifications: ^23.0.1
 
   # Abrir URLs en el navegador externo
-  url_launcher: ^6.3.0
+  url_launcher: ^6.3.3
 
   # Cifrado del canal WebSocket (salto a salto): ECDH P-256 + HKDF + AES-256-GCM.
   # pointycastle hace el ECDH en Dart puro (Ecdh.p256 de `cryptography` no está
   # implementado sin plugin); cryptography_flutter usa AES-GCM nativo en el dispositivo.
-  cryptography: ^2.7.0
+  cryptography: ^2.9.0
   cryptography_flutter: ^2.3.4
   pointycastle: ^4.0.0
 
@@ -76,19 +77,22 @@ dependencies:
   path: ^1.9.1
 
   # Previsualizador de archivos
-  photo_view: ^0.14.0
-  video_player: ^2.8.0
-  chewie: ^1.8.0
-  audioplayers: ^6.1.0
-  pdfx: ^2.6.0
-  flutter_svg: ^2.0.10
+  photo_view: ^0.15.0
+  video_player: ^2.14.1
+  chewie: ^1.17.4
+  audioplayers: ^6.8.1
+  pdfx: ^2.11.0
+  flutter_svg: ^2.3.4
 
   # Parsing de multipart/form-data en el servidor embebido
-  mime: ^1.0.6
+  mime: ^2.1.0
 
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
-  cupertino_icons: ^1.0.8
+  cupertino_icons: ^1.0.9
+
+  # Widgets Material (separados del SDK desde Flutter 3.47)
+  material_ui: ^1.11.0
 
 dev_dependencies:
   flutter_test:
@@ -102,7 +106,7 @@ dev_dependencies:
   flutter_lints: ^6.0.0
 
   # Generador de íconos de la app
-  flutter_launcher_icons: ^0.14.3
+  flutter_launcher_icons: ^0.14.4
 
 flutter_launcher_icons:
   android: true

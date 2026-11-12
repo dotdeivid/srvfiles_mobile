@@ -30,12 +30,10 @@ class StagedFile {
 /// Manages file-related state: listing, upload, download, share, deletion.
 class FilesController extends ChangeNotifier {
   FilesController({
-    FilesService? filesService,
-    ApiConfig? apiConfig,
+    this._filesService,
+    this._apiConfig,
     DownloadDirService? downloadDirService,
-  })  : _filesService = filesService,
-        _apiConfig = apiConfig,
-        _downloadDirService = downloadDirService ?? const DownloadDirService();
+  }) : _downloadDirService = downloadDirService ?? const DownloadDirService();
 
   FilesService? _filesService;
   ApiConfig? _apiConfig;
@@ -190,18 +188,16 @@ class FilesController extends ChangeNotifier {
   // ─── Upload ─────────────────────────────────────────────────────
 
   Future<List<StagedFile>> pickFiles() async {
-    final result = await FilePicker.platform.pickFiles(
-      allowMultiple: true,
-      type: FileType.any,
-    );
-
-    if (result == null || result.files.isEmpty) return [];
+    final result = await FilePicker.pickFiles(type: FileType.any);
+    if (result.isEmpty) return [];
 
     final picked = <StagedFile>[];
-    for (final f in result.files) {
-      if (f.path == null) continue;
-      final file = File(f.path!);
-      picked.add(StagedFile(file, f.name, f.size > 0 ? f.size : await file.length()));
+    for (final f in result) {
+      final path = f.path;
+      if (path == null) continue;
+      final file = File(path);
+      final size = f.lengthSync();
+      picked.add(StagedFile(file, f.name, size != null && size > 0 ? size : await file.length()));
     }
 
     if (picked.isEmpty) return [];
@@ -268,7 +264,7 @@ class FilesController extends ChangeNotifier {
   /// Borra las copias que file_picker deja en la caché de la app.
   Future<void> _clearPickerCache() async {
     try {
-      await FilePicker.platform.clearTemporaryFiles();
+      await FilePicker.clearTemporaryFiles();
     } catch (_) {
       // No disponible en todas las plataformas.
     }
