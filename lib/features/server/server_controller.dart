@@ -115,7 +115,7 @@ class ServerController extends ChangeNotifier {
 
   void startDirectScanning() {
     _scanTimer?.cancel();
-    unawaited(scanForDirectDevices());
+    unawaited(scanForDirectDevices(manual: true));
     _scanTimer = Timer.periodic(scanInterval, (_) {
       if (!_scanPaused) unawaited(scanForDirectDevices());
     });
@@ -138,12 +138,18 @@ class ServerController extends ChangeNotifier {
     if (wasPaused && _scanTimer != null) unawaited(scanForDirectDevices());
   }
 
-  Future<void> scanForDirectDevices() async {
+  /// Busca teléfonos para envío directo. El refresco periódico usa solo
+  /// mDNS; [manual] (botón de reescanear) además barre la subred si mDNS no
+  /// encuentra nada.
+  Future<void> scanForDirectDevices({bool manual = false}) async {
     if (directScanning || _disposed) return; // evitar barridos solapados
     directScanning = true;
     _notify();
     try {
-      final devices = await _discovery.scanLan(isCancelled: () => _disposed);
+      final devices = await _discovery.discover(
+        fallbackScan: manual,
+        isCancelled: () => _disposed,
+      );
       final ownIp = relay.localIp;
       // Solo teléfonos con relay y sin PIN aceptan envío directo.
       directDevices = devices

@@ -7,6 +7,7 @@ import '../utils/local_network.dart';
 import 'mobile_server_storage_service.dart';
 import 'pin_service.dart';
 import 'app_logger.dart';
+import 'mdns_service.dart';
 import 'relay/relay_types.dart';
 import 'relay/relay_auth.dart';
 import 'relay/relay_http_handler.dart';
@@ -45,12 +46,15 @@ class EmbeddedRelay {
 
   String? _deviceName;
 
+  /// Anuncio mDNS del relay: así lo encuentran los demás sin barrer la red.
+  final MdnsService _mdns;
+
   // Sub-handlers
   final RelayAuth _auth = RelayAuth();
   final RelayHttpHandler _httpHandler = RelayHttpHandler();
   late final RelayWsHandler _wsHandler;
 
-  EmbeddedRelay() {
+  EmbeddedRelay({MdnsService? mdns}) : _mdns = mdns ?? MdnsService() {
     _wsHandler = RelayWsHandler(
       clients: _clients,
       transfers: _transfers,
@@ -75,7 +79,13 @@ class EmbeddedRelay {
   String get loopbackUrl => 'http://127.0.0.1:$_port';
 
   /// Sets the device name returned in /api/health.
-  void setDeviceName(String name) => _deviceName = name;
+  void setDeviceName(String name) {
+    if (name == _deviceName) return;
+    _deviceName = name;
+    if (_server != null) unawaited(_advertise());
+  }
+
+  Future<void> _advertise() => _mdns.advertise(name: _deviceName ?? 'SrvFiles', port: _port);
 
   // ─── Lifecycle ────────────────────────────────────────────────────
 
@@ -124,6 +134,7 @@ class EmbeddedRelay {
     }
 
     _server!.listen((req) => unawaited(_handleRequest(req)));
+    unawaited(_advertise());
   }
 
   /// Activates full server mode. Returns the generated PIN.
@@ -159,6 +170,7 @@ class EmbeddedRelay {
 
   Future<void> _doStop() async {
     if (_starting != null) await _starting;
+    await _mdns.stopAdvertising();
     await stopServerMode();
     await _disconnectAll();
     final server = _server;

@@ -4,6 +4,7 @@ import 'dart:io';
 import '../config/api_config.dart';
 import '../utils/local_network.dart';
 import 'app_logger.dart';
+import 'mdns_service.dart';
 
 class DiscoveredServer {
   final String ip;
@@ -49,8 +50,34 @@ class DiscoveredServer {
 }
 
 class DiscoveryService {
+  DiscoveryService({MdnsService? mdns}) : _mdns = mdns ?? MdnsService();
+
+  final MdnsService _mdns;
+
   /// Peticiones simultáneas durante el barrido de la subred.
   static const _scanConcurrency = 32;
+
+  /// Busca servidores SrvFiles: primero por mDNS (cada equipo se anuncia) y,
+  /// si no aparece ninguno y [fallbackScan] es true, barre la subred, para
+  /// encontrar equipos con versiones anteriores que no se anuncian.
+  ///
+  /// Cada resultado de mDNS se valida con `/api/health` igual que el barrido.
+  Future<List<DiscoveredServer>> discover({
+    bool fallbackScan = true,
+    bool Function()? isCancelled,
+  }) async {
+    final urls = await _mdns.browse();
+    final probed = await Future.wait(
+      urls.map((url) => probe(url, timeout: const Duration(seconds: 2))),
+    );
+    final byUrl = {for (final s in probed.nonNulls) s.url: s};
+    final found = byUrl.values.toList()..sort((a, b) => a.ip.compareTo(b.ip));
+    if (found.isNotEmpty || !fallbackScan || (isCancelled?.call() ?? false)) {
+      return found;
+    }
+    AppLogger.instance.debug('[Discovery] mDNS found nothing, scanning the subnet');
+    return scanLan(isCancelled: isCancelled);
+  }
 
   /// Prueba una URL y devuelve un [DiscoveredServer] si es un servidor SrvFiles
   /// válido, o null si no responde o no es SrvFiles.

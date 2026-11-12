@@ -18,6 +18,9 @@ class FileGridItem extends StatelessWidget {
     this.onPreview,
     this.onCopyLink,
     this.onDelete,
+    this.onSelect,
+    this.selectionMode = false,
+    this.selected = false,
   });
 
   final FileInfo file;
@@ -27,6 +30,11 @@ class FileGridItem extends StatelessWidget {
   final VoidCallback? onPreview;
   final VoidCallback? onCopyLink;
   final VoidCallback? onDelete;
+
+  /// Ver [FileListItem.onSelect].
+  final VoidCallback? onSelect;
+  final bool selectionMode;
+  final bool selected;
 
   void _showContextMenu(BuildContext context) {
     HapticFeedback.mediumImpact();
@@ -83,6 +91,19 @@ class FileGridItem extends StatelessWidget {
               ),
             ),
             const Divider(color: AppColors.borderSubtle, height: 1),
+            if (onSelect != null)
+              ListTile(
+                leading: const Icon(Icons.check_circle_outline_rounded,
+                    color: AppColors.textSecondary, size: 22),
+                title: const Text('Seleccionar',
+                    style: TextStyle(color: AppColors.textPrimary, fontSize: 14)),
+                onTap: () {
+                  HapticFeedback.selectionClick();
+                  Navigator.of(ctx).pop();
+                  onSelect!();
+                },
+                dense: true,
+              ),
             ListTile(
               leading: const Icon(Icons.download_rounded,
                   color: AppColors.textSecondary, size: 22),
@@ -146,13 +167,26 @@ class FileGridItem extends StatelessWidget {
     return RepaintBoundary(
       child: Semantics(
       label: '${file.name}, ${formatBytes(file.size)}',
+      selected: selectionMode ? selected : null,
       child: GestureDetector(
-        onLongPress: () => _showContextMenu(context),
+        onTap: selectionMode ? onSelect : null,
+        onLongPress: selectionMode ? onSelect : () => _showContextMenu(context),
         child: GlassCard(
           padding: const EdgeInsets.all(AppSpacing.md),
+          borderColor: selected ? AppColors.accentPrimary : null,
+          backgroundColor: selected ? AppColors.accentPrimary.withValues(alpha: 0.12) : null,
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
+              if (selectionMode)
+                Align(
+                  alignment: Alignment.topRight,
+                  child: Icon(
+                    selected ? Icons.check_circle_rounded : Icons.radio_button_unchecked_rounded,
+                    size: 20,
+                    color: selected ? AppColors.accentPrimary : AppColors.textMuted,
+                  ),
+                ),
               // Emoji grande
               Text(
                 getFileIcon(file.name),
@@ -185,7 +219,8 @@ class FileGridItem extends StatelessWidget {
 
               const Spacer(),
 
-              // Acciones
+              // Acciones (ocultas en modo selección)
+              if (!selectionMode)
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [

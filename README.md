@@ -18,7 +18,8 @@ App Android para el ecosistema [SrvFiles](https://github.com/dotdeivid/srvfiles)
 - Transferencia P2P directa entre dispositivos (sin pasar por disco)
 - **Cifrado de extremo a extremo obligatorio** — cada transferencia negocia su propia clave (ECDH P-256 + AES-256-GCM) entre emisor y receptor; el relay o servidor solo reenvía y no puede leer el archivo. Ambos ven un código de 6 dígitos y el receptor confirma que coincide antes de aceptar. Además, el canal con el servidor va cifrado (candado en el encabezado). Protocolo: `docs/protocol.md` de srvfiles_web
 - Descargas, archivos recibidos y modo servidor comparten una sola carpeta: `Download/SrvFiles`, la misma que el servidor web y la app de escritorio (si Android no permite escribir ahí, el almacenamiento propio de la app; en iOS, la app Archivos). Sin permisos especiales: la app ve en esa carpeta solo los archivos que creó ella. Lo que había en las carpetas anteriores se mueve solo la primera vez
-- Descubrimiento automático de servidores en la red local al abrir la app
+- Descubrimiento automático de servidores y teléfonos en la red local por mDNS (`_srvfiles._tcp`), con barrido de la subred como respaldo para equipos con versiones anteriores
+- Acciones sobre varios archivos: "Seleccionar" en el menú contextual y barra para descargar, compartir o eliminar los marcados
 - Autenticación PIN al conectarse a servidores protegidos
 - ConnectSheet: info del servidor activo (IP, PIN, estado) accesible desde el header
 - Indicador de espacio en disco en tiempo real

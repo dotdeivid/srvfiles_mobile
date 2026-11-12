@@ -76,6 +76,23 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   /// compartida, donde también quedan los recibidos (no repetirlos).
   bool get _isOwnServerMode => !_hasServer && _serverCtrl.relay.isServerMode;
 
+  /// Archivos del servidor marcados para acciones sobre varios (por nombre).
+  final Set<String> _selected = {};
+  bool get _selecting => _selected.isNotEmpty;
+
+  /// Seleccionados que siguen en la lista (pudieron borrarse desde otro equipo).
+  List<FileInfo> get _selectedFiles =>
+      _filesCtrl.files.where((f) => _selected.contains(f.name)).toList();
+
+  void _toggleSelected(FileInfo file) {
+    HapticFeedback.selectionClick();
+    setState(() {
+      if (!_selected.remove(file.name)) _selected.add(file.name);
+    });
+  }
+
+  void _clearSelection() => setState(_selected.clear);
+
   /// Recibidos (separados de los archivos del servidor).
   final ValueNotifier<List<FileInfo>> _receivedFiles = ValueNotifier([]);
 
@@ -413,13 +430,90 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   /// Modo servidor propio: el archivo ya está en la carpeta compartida;
   /// descargarlo crearía una copia (`foto (1).jpg`), así que se abre.
   Future<void> _openOwnFile(FileInfo file) async {
-    final dir = await const DownloadDirService().getDownloadsDir();
-    final local = resolveInside(dir, file.name);
-    if (local == null || !await local.exists()) {
+    final path = await _ownFilePath(file);
+    if (path == null) {
       if (mounted) _showSnackBar('"${file.name}" ya no existe', isError: true);
       return;
     }
-    await OpenFilex.open(local.path);
+    await OpenFilex.open(path);
+  }
+
+  // ─── Acciones sobre varios archivos ───────────────────────────────
+
+  Future<void> _downloadSelected() async {
+    final files = _selectedFiles;
+    _clearSelection();
+    var ok = 0;
+    for (final file in files) {
+      try {
+        if (await _filesCtrl.download(file) != null) ok++;
+      } on OperationCancelledException {
+        _showSnackBar('Descarga cancelada');
+        return;
+      }
+      if (!mounted) return;
+    }
+    _showSnackBar(
+      ok == files.length
+          ? '${_count(ok)} descargado${ok == 1 ? '' : 's'}'
+          : 'Se descargaron $ok de ${files.length} archivos',
+      isError: ok != files.length,
+    );
+  }
+
+  Future<void> _shareSelected() async {
+    final files = _selectedFiles;
+    final paths = <String>[];
+    for (final file in files) {
+      final path = _isOwnServerMode ? await _ownFilePath(file) : await _filesCtrl.prepareShare(file);
+      if (path != null) paths.add(path);
+      if (!mounted) return;
+    }
+    if (paths.isEmpty) {
+      _showSnackBar('No se pudieron preparar los archivos', isError: true);
+      return;
+    }
+    _clearSelection();
+    await SharePlus.instance.share(ShareParams(files: [for (final path in paths) XFile(path)]));
+  }
+
+  Future<void> _deleteSelected() async {
+    final files = _selectedFiles;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Eliminar archivos'),
+        content: Text('¿Eliminar ${_count(files.length)} del servidor?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancelar')),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            style: TextButton.styleFrom(foregroundColor: AppColors.danger),
+            child: const Text('Eliminar'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    _clearSelection();
+    var ok = 0;
+    for (final file in files) {
+      if (await _filesCtrl.deleteFile(file.name)) ok++;
+    }
+    _showSnackBar(
+      ok == files.length
+          ? '${_count(ok)} eliminado${ok == 1 ? '' : 's'}'
+          : 'Se eliminaron $ok de ${files.length} archivos',
+      isError: ok != files.length,
+    );
+  }
+
+  static String _count(int n) => n == 1 ? '1 archivo' : '$n archivos';
+
+  /// Ruta local de un archivo del servidor propio (carpeta compartida).
+  Future<String?> _ownFilePath(FileInfo file) async {
+    final local = resolveInside(await const DownloadDirService().getDownloadsDir(), file.name);
+    return local != null && await local.exists() ? local.path : null;
   }
 
   Future<void> _onShare(FileInfo file) async {
@@ -534,9 +628,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     // Se redibuja cuando cambian los archivos o el estado del relay; lo que
     // depende de las transferencias (progreso) tiene su propio builder.
-    return ListenableBuilder(
-      listenable: Listenable.merge([_filesCtrl, _serverCtrl]),
-      builder: (context, _) => _buildScaffold(context),
+    return PopScope(
+      // Atrás sale del modo selección antes de salir de la pantalla.
+      canPop: !_selecting,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && _selecting) _clearSelection();
+      },
+      child: ListenableBuilder(
+        listenable: Listenable.merge([_filesCtrl, _serverCtrl]),
+        builder: (context, _) => _buildScaffold(context),
+      ),
     );
   }
 
@@ -803,7 +904,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       TextButton.icon(
                         onPressed: _serverCtrl.directScanning
                             ? null
-                            : () => unawaited(_serverCtrl.scanForDirectDevices()),
+                            : () => unawaited(_serverCtrl.scanForDirectDevices(manual: true)),
                         icon: const Icon(Icons.refresh_rounded, size: 14),
                         label: const Text('Escanear', style: TextStyle(fontSize: 11)),
                         style: TextButton.styleFrom(
@@ -1017,6 +1118,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Widget _buildToolbar(ThemeData theme, List<FileInfo> filtered) {
+    if (_selecting) return _buildSelectionBar(filtered);
     return Padding(
       padding: const EdgeInsets.fromLTRB(
         AppSpacing.md, AppSpacing.sm, AppSpacing.md, 0,
@@ -1061,6 +1163,58 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 style: theme.textTheme.bodySmall,
               ),
             ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Reemplaza a la barra de búsqueda mientras hay archivos seleccionados.
+  Widget _buildSelectionBar(List<FileInfo> filtered) {
+    final count = _selectedFiles.length;
+    final allSelected = filtered.isNotEmpty && filtered.every((f) => _selected.contains(f.name));
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(AppSpacing.xs, AppSpacing.sm, AppSpacing.xs, AppSpacing.sm),
+      child: Row(
+        children: [
+          IconButton(
+            icon: const Icon(Icons.close_rounded),
+            tooltip: 'Cancelar selección',
+            onPressed: _clearSelection,
+          ),
+          Expanded(
+            child: Text(
+              count == 1 ? '1 seleccionado' : '$count seleccionados',
+              style: const TextStyle(color: AppColors.textPrimary, fontWeight: FontWeight.w600),
+            ),
+          ),
+          IconButton(
+            icon: Icon(allSelected ? Icons.deselect_rounded : Icons.select_all_rounded),
+            tooltip: allSelected ? 'Quitar selección' : 'Seleccionar todo',
+            onPressed: () => setState(() {
+              if (allSelected) {
+                _selected.clear();
+              } else {
+                _selected.addAll(filtered.map((f) => f.name));
+              }
+            }),
+          ),
+          // En el servidor propio los archivos ya están en el teléfono.
+          if (!_isOwnServerMode)
+            IconButton(
+              icon: const Icon(Icons.download_rounded),
+              tooltip: 'Descargar',
+              onPressed: count == 0 ? null : _downloadSelected,
+            ),
+          IconButton(
+            icon: const Icon(Icons.share_rounded),
+            tooltip: 'Compartir',
+            onPressed: count == 0 ? null : _shareSelected,
+          ),
+          IconButton(
+            icon: const Icon(Icons.delete_outline_rounded, color: AppColors.danger),
+            tooltip: 'Eliminar',
+            onPressed: count == 0 ? null : _deleteSelected,
           ),
         ],
       ),
@@ -1292,6 +1446,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             onShare: () => _onShare(file),
             onPreview: () => _previewServerFile(context, file),
             onDelete: () => _deleteServerFile(file),
+            onSelect: () => _toggleSelected(file),
+            selectionMode: _selecting,
+            selected: _selected.contains(file.name),
           );
         },
         childCount: files.length,
@@ -1322,6 +1479,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   onShare: () => _onShare(file),
                   onPreview: () => _previewServerFile(context, file),
                   onDelete: () => _deleteServerFile(file),
+                  onSelect: () => _toggleSelected(file),
+                  selectionMode: _selecting,
+                  selected: _selected.contains(file.name),
                 );
               },
               childCount: files.length,

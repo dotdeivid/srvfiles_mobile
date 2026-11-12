@@ -68,6 +68,10 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_srvfiles._tcp</string>
+	</array>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>SrvFiles busca y se conecta a otros dispositivos de tu red local para compartir archivos.</string>
 	<key>UIFileSharingEnabled</key>

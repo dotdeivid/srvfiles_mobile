@@ -19,6 +19,9 @@ class FileListItem extends StatelessWidget {
     this.onDelete,
     this.downloadIcon = Icons.download_rounded,
     this.downloadTooltip = 'Descargar',
+    this.onSelect,
+    this.selectionMode = false,
+    this.selected = false,
   });
 
   final FileInfo file;
@@ -31,6 +34,14 @@ class FileListItem extends StatelessWidget {
   /// Ícono del botón de acción principal (descarga/abrir).
   final IconData downloadIcon;
   final String downloadTooltip;
+
+  /// Marca o desmarca el archivo para acciones sobre varios. Null oculta
+  /// "Seleccionar" en el menú contextual.
+  final VoidCallback? onSelect;
+
+  /// Modo selección: tocar marca/desmarca y se ocultan los botones de la fila.
+  final bool selectionMode;
+  final bool selected;
 
   void _showContextMenu(BuildContext context) {
     HapticFeedback.mediumImpact();
@@ -89,6 +100,15 @@ class FileListItem extends StatelessWidget {
               ),
             ),
             const Divider(color: AppColors.borderSubtle, height: 1),
+            if (onSelect != null)
+              _ContextMenuItem(
+                icon: Icons.check_circle_outline_rounded,
+                label: 'Seleccionar',
+                onTap: () {
+                  Navigator.of(ctx).pop();
+                  onSelect!();
+                },
+              ),
             _ContextMenuItem(
               icon: Icons.download_rounded,
               label: 'Descargar',
@@ -137,18 +157,29 @@ class FileListItem extends StatelessWidget {
     return RepaintBoundary(
       child: Semantics(
       label: '${file.name}, ${formatBytes(file.size)}',
+      selected: selectionMode ? selected : null,
       child: InkWell(
-        onLongPress: () => _showContextMenu(context),
+        onTap: selectionMode ? onSelect : null,
+        onLongPress: selectionMode ? onSelect : () => _showContextMenu(context),
         child: Container(
           padding: const EdgeInsets.symmetric(
               horizontal: AppSpacing.md, vertical: AppSpacing.sm + 2),
-          decoration: const BoxDecoration(
-            border: Border(
+          decoration: BoxDecoration(
+            color: selected ? AppColors.accentPrimary.withValues(alpha: 0.12) : null,
+            border: const Border(
               bottom: BorderSide(color: AppColors.borderSubtle),
             ),
           ),
           child: Row(
             children: [
+              if (selectionMode) ...[
+                Icon(
+                  selected ? Icons.check_circle_rounded : Icons.radio_button_unchecked_rounded,
+                  size: 22,
+                  color: selected ? AppColors.accentPrimary : AppColors.textMuted,
+                ),
+                const SizedBox(width: AppSpacing.sm),
+              ],
               // Emoji icono
               Text(
                 getFileIcon(file.name),
@@ -187,7 +218,8 @@ class FileListItem extends StatelessWidget {
                 ),
               ),
 
-              // Acciones
+              // Acciones (ocultas en modo selección: van en la barra de selección)
+              if (!selectionMode) ...[
               if (onPreview != null && FileTypeHelper.canPreview(file.name))
                 Semantics(
                   button: true,
@@ -247,6 +279,7 @@ class FileListItem extends StatelessWidget {
                     visualDensity: VisualDensity.compact,
                   ),
                 ),
+              ],
             ],
           ),
         ),

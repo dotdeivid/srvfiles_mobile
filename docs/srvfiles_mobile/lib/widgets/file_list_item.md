@@ -72,3 +72,9 @@ RepaintBoundary
 `Expanded` hace que la columna de texto tome todo el espacio horizontal disponible, empujando los botones al extremo derecho. Sin `Expanded`, el `Row` no sabría cómo distribuir el espacio.
 
 `RepaintBoundary` aísla la capa de repintado de este widget del resto del árbol. Cuando un item adyacente en la lista cambia de estado (p.ej. progreso de descarga), Flutter puede redibujar solo ese item sin invalidar toda la lista. Especialmente importante en listas largas con múltiples ítems actualizándose en paralelo.
+
+## Modo selección
+
+- `onSelect`: agrega "Seleccionar" al menú contextual (mantener presionado).
+- `selectionMode: true`: tocar o mantener presionado marca/desmarca (`onSelect`), se muestra un círculo de selección y se ocultan los botones de acción, que pasan a la barra de selección de `HomeScreen`.
+- `selected: true`: resalta el archivo con el color de acento.
