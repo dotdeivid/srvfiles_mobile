@@ -17,7 +17,7 @@ App Android para el ecosistema [SrvFiles](https://github.com/dotdeivid/srvfiles)
 - **Previsualización de archivos** — botón "ver" en lista y grilla; imágenes, video, audio, PDF y texto se abren en pantalla completa sin descargar permanentemente (ver tabla abajo)
 - Transferencia P2P directa entre dispositivos (sin pasar por disco)
 - **Cifrado de extremo a extremo obligatorio** — cada transferencia negocia su propia clave (ECDH P-256 + AES-256-GCM) entre emisor y receptor; el relay o servidor solo reenvía y no puede leer el archivo. Ambos ven un código de 6 dígitos y el receptor confirma que coincide antes de aceptar. Además, el canal con el servidor va cifrado (candado en el encabezado). Protocolo: `docs/protocol.md` de srvfiles_web
-- Archivos recibidos guardados en `Download/SrvFiles/received/` (si Android no permite escribir ahí, en el almacenamiento propio de la app; en iOS, en la app Archivos)
+- Descargas, archivos recibidos y modo servidor comparten una sola carpeta: `Download/SrvFiles`, la misma que el servidor web y la app de escritorio (si Android no permite escribir ahí, el almacenamiento propio de la app; en iOS, la app Archivos). Sin permisos especiales: la app ve en esa carpeta solo los archivos que creó ella. Lo que había en las carpetas anteriores se mueve solo la primera vez
 - Descubrimiento automático de servidores en la red local al abrir la app
 - Autenticación PIN al conectarse a servidores protegidos
 - ConnectSheet: info del servidor activo (IP, PIN, estado) accesible desde el header
@@ -42,7 +42,7 @@ App Android para el ecosistema [SrvFiles](https://github.com/dotdeivid/srvfiles)
 | **Texto / Código** | txt, md, json, xml, csv, yaml, yml, html, js, ts, dart, py, go, rs, c, cpp, h, css, sh, bash | Widget monospace scrollable |
 | **Desconocido** | docx, xlsx, zip, apk, etc. | Botón "Abrir con" → `open_filex` |
 
-Los archivos del servidor se descargan a un directorio temporal y se eliminan al cerrar el previsualizador. Los archivos ya recibidos (en `Download/SrvFiles/received/`) se abren directamente desde disco.
+Los archivos del servidor se descargan a un directorio temporal y se eliminan al cerrar el previsualizador. Los archivos ya recibidos (en `Download/SrvFiles`) se abren directamente desde disco.
 
 ---
 

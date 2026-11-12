@@ -29,10 +29,21 @@ bool isPlainFileName(String name) {
   return true;
 }
 
+/// true para archivos que no se muestran ni se sirven: empiezan con punto
+/// (`.nomedia`, `.DS_Store`, temporales), recepciones o subidas en curso
+/// (`.part`), y archivos de sistema de Windows. Misma regla que el backend Go.
+bool isHiddenFileName(String name) {
+  final lower = name.toLowerCase();
+  return name.startsWith('.') ||
+      lower.endsWith('.part') ||
+      lower == 'desktop.ini' ||
+      lower == 'thumbs.db';
+}
+
 /// Resuelve [name] dentro de [dir] y devuelve el archivo solo si la ruta
 /// resultante queda dentro del directorio. Null si el nombre no es válido.
 File? resolveInside(Directory dir, String name) {
-  if (!isPlainFileName(name)) return null;
+  if (!isPlainFileName(name) || isHiddenFileName(name)) return null;
   final base = p.normalize(p.absolute(dir.path));
   final target = p.normalize(p.join(base, name));
   if (!p.isWithin(base, target)) return null;

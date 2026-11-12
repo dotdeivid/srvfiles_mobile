@@ -2,11 +2,11 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
 import '../models/file_info.dart';
 import '../models/disk_stats.dart';
 import '../utils/file_names.dart';
 import 'app_logger.dart';
+import 'download_dir_service.dart';
 
 const _diskChannel = MethodChannel('com.srvfiles/disk_space');
 
@@ -20,8 +20,8 @@ Future<List<FileInfo>> listFilesIn(
   final entries = <({File file, FileStat stat})>[];
   await for (final entity in dir.list(followLinks: false)) {
     if (entity is! File) continue;
-    final name = p.basename(entity.path);
-    if (name.endsWith('.part')) continue; // subida o recepción en curso
+    // Ocultos, de sistema y subidas o recepciones en curso (.part).
+    if (isHiddenFileName(p.basename(entity.path))) continue;
     entries.add((file: entity, stat: await entity.stat()));
   }
   entries.sort((a, b) => b.stat.modified.compareTo(a.stat.modified));
@@ -47,9 +47,9 @@ Future<int?> getFreeDiskBytes() async {
   }
 }
 
-/// Gestiona el directorio de archivos del servidor móvil.
-/// Los archivos se guardan en Documents/SrvFiles/server/.
-/// Separado de ReceivedFilesService para diferenciarlos visualmente.
+/// Gestiona los archivos que comparte el modo servidor del teléfono: la
+/// carpeta compartida `Download/SrvFiles` (ver [DownloadDirService]), la misma
+/// de las descargas y los archivos recibidos.
 class MobileServerStorageService {
   Directory? _dir;
 
@@ -62,13 +62,7 @@ class MobileServerStorageService {
   /// Obtiene (y crea si no existe) el directorio del servidor.
   Future<Directory> getDirectory() async {
     if (_dir != null) return _dir!;
-    final baseDir = await getApplicationDocumentsDirectory();
-    final dir = Directory(p.join(baseDir.path, 'SrvFiles', 'server'));
-    if (!await dir.exists()) {
-      await dir.create(recursive: true);
-    }
-    _dir = dir;
-    return dir;
+    return _dir = await const DownloadDirService().getDownloadsDir();
   }
 
   /// Lista los archivos ordenados por fecha de modificación (más reciente primero).
@@ -154,7 +148,9 @@ class MobileServerStorageService {
     int used = 0;
     if (await dir.exists()) {
       await for (final entity in dir.list(followLinks: false)) {
-        if (entity is File) used += (await entity.stat()).size;
+        if (entity is File && !isHiddenFileName(p.basename(entity.path))) {
+          used += (await entity.stat()).size;
+        }
       }
     }
 

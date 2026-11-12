@@ -91,4 +91,12 @@ void main() {
     expect(getFileIcon('datos.xyz'), isNot('📁'));
     expect(getFileIcon('sin-extension'), isNot('📁'));
   });
+
+  test('isHiddenFileName hides system files and in-progress writes', () {
+    for (final name in ['.nomedia', '.DS_Store', 'foto.jpg.part', 'desktop.ini', 'Thumbs.db']) {
+      expect(isHiddenFileName(name), true, reason: name);
+    }
+    expect(isHiddenFileName('foto.jpg'), false);
+    expect(resolveInside(Directory.systemTemp, '.nomedia'), isNull);
+  });
 }

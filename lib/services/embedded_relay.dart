@@ -286,6 +286,12 @@ class EmbeddedRelay {
 
   // ─── Broadcast helpers ────────────────────────────────────────────
 
+  /// Avisa a los clientes que la carpeta compartida cambió por fuera de la API
+  /// (archivo recibido por P2P o descargado de otro servidor).
+  void notifyFilesChanged() {
+    if (_serverModeActive) _broadcastFilesChanged();
+  }
+
   void _broadcastFilesChanged() {
     final msg = {'type': 'files-changed'};
     for (final client in _clients.values) {

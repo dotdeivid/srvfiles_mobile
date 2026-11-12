@@ -5,10 +5,9 @@ import '../utils/file_names.dart';
 import 'download_dir_service.dart';
 import 'mobile_server_storage_service.dart' show listFilesIn;
 
-/// Gestiona el directorio local de archivos recibidos por P2P.
-/// En Android: Download/SrvFiles/received/ (público, visible para galería/archivos),
-/// con almacenamiento propio de la app como alternativa.
-/// En otros: Documents/SrvFiles/received/.
+/// Gestiona los archivos recibidos por P2P. Van a la carpeta compartida
+/// `Download/SrvFiles` (ver [DownloadDirService]), la misma de las descargas y
+/// del modo servidor; si no se puede escribir ahí, al almacenamiento propio.
 class ReceivedFilesService {
   Directory? _dir;
   final DownloadDirService _dirs;
