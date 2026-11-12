@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:srvfiles_mobile/services/e2e_service.dart';
 import 'package:srvfiles_mobile/services/embedded_relay.dart';
+import 'package:srvfiles_mobile/services/relay/relay_origin.dart';
 import 'package:srvfiles_mobile/services/mobile_server_storage_service.dart';
 
 /// Relay embebido: API HTTP del modo servidor, señalización WebSocket y las
@@ -82,6 +83,40 @@ void main() {
     expect(body['appName'], 'Mi Teléfono');
     expect(body['relay'], true);
     expect(body['serverMode'], false);
+  });
+
+  // Una web cualquiera abierta en el navegador no puede usar el relay.
+  group('origin', () {
+    test('rule matches the Go backend (webguard)', () {
+      const host = '192.168.1.5:8080';
+      expect(isAllowedOrigin(null, host), true); // apps nativas
+      expect(isAllowedOrigin('http://192.168.1.5:8080', host), true); // la propia página
+      expect(isAllowedOrigin('tauri://localhost', host), true);
+      expect(isAllowedOrigin('https://tauri.localhost', host), true);
+      expect(isAllowedOrigin('http://localhost:5173', host), true); // Vite
+      expect(isAllowedOrigin('https://evil.example', host), false);
+      expect(isAllowedOrigin('http://192.168.1.5:9999', host), false);
+      expect(isAllowedOrigin('http://localhost:3000', host), false);
+      expect(isAllowedOrigin('null', host), false);
+    });
+
+    test('foreign origins get 403 on the API and the WebSocket', () async {
+      final foreign = await send('GET', '/api/health', headers: {'Origin': 'https://evil.example'});
+      expect(foreign.status, 403);
+
+      final own = await send('GET', '/api/health', headers: {'Origin': base()});
+      expect(own.status, 200);
+
+      final tauri = await send('OPTIONS', '/api/files', headers: {'Origin': 'tauri://localhost'});
+      expect(tauri.status, 204);
+
+      await expectLater(
+        WebSocket.connect('ws://127.0.0.1:${relay.port}/ws', headers: {'Origin': 'https://evil.example'}),
+        throwsA(isA<WebSocketException>()),
+      );
+      final ws = await WebSocket.connect('ws://127.0.0.1:${relay.port}/ws'); // app nativa
+      await ws.close();
+    });
   });
 
   group('server mode', () {

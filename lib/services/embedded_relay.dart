@@ -10,6 +10,7 @@ import 'app_logger.dart';
 import 'relay/relay_types.dart';
 import 'relay/relay_auth.dart';
 import 'relay/relay_http_handler.dart';
+import 'relay/relay_origin.dart';
 import 'relay/relay_ws_handler.dart';
 
 /// Mini HTTP + WebSocket relay server embedded in the mobile app.
@@ -197,19 +198,31 @@ class EmbeddedRelay {
   }
 
   Future<void> _route(HttpRequest req) async {
-    // CORS: necesario para clientes de otro origen (app de escritorio Tauri).
-    // La autenticación va por cabecera, no por cookies.
-    req.response.headers.set('Access-Control-Allow-Origin', '*');
-    req.response.headers.set('Access-Control-Allow-Headers', 'Content-Type, X-SrvFiles-Token, Range');
-    req.response.headers.set('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+    final rawPath = req.uri.path;
+
+    // Solo orígenes permitidos pueden usar la API y el WebSocket (ver
+    // relay_origin.dart). Los archivos estáticos de la web quedan abiertos.
+    final origin = req.headers.value('origin');
+    if (origin != null && origin.isNotEmpty) {
+      if (!isAllowedOrigin(origin, req.headers.value(HttpHeaders.hostHeader)) &&
+          (rawPath.startsWith('/api/') || rawPath == '/ws' || req.method == 'OPTIONS')) {
+        AppLogger.instance.warn('embedded_relay: origen no permitido $origin en $rawPath');
+        return _json(req, HttpStatus.forbidden, {'error': 'Origin not allowed'});
+      }
+      req.response.headers
+        ..set('Access-Control-Allow-Origin', origin)
+        ..add(HttpHeaders.varyHeader, 'Origin')
+        ..set('Access-Control-Allow-Headers', 'Content-Type, X-SrvFiles-Token, Range')
+        ..set('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS')
+        ..set('Access-Control-Expose-Headers', 'Content-Range, Accept-Ranges, Content-Length, Content-Disposition');
+    }
 
     if (req.method == 'OPTIONS') {
-      req.response.statusCode = HttpStatus.ok;
+      req.response.statusCode = HttpStatus.noContent;
       await req.response.close();
       return;
     }
 
-    final rawPath = req.uri.path;
     final path = rawPath.length > 1 && rawPath.endsWith('/')
         ? rawPath.substring(0, rawPath.length - 1)
         : rawPath;
