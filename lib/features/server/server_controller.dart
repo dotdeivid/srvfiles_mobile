@@ -1,7 +1,5 @@
 import 'dart:async';
-import 'dart:convert';
 import 'package:flutter/foundation.dart';
-import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../config/api_config.dart';
 import '../../services/embedded_relay.dart';
@@ -10,21 +8,22 @@ import '../../services/direct_transfer_pool.dart';
 import '../../services/files_service.dart';
 import '../../services/transfer_service.dart';
 import '../../services/app_logger.dart';
-import '../../models/transfer_request.dart';
 
 /// Manages the embedded relay lifecycle, server mode toggle, and direct-mode
 /// device scanning / pool connections.
-///
-/// Replaces the relay/server/direct-related logic that lived in
-/// `_HomeScreenState` (home_screen.dart L167–370).
 class ServerController extends ChangeNotifier {
   ServerController({
-    required this.relay,
+    EmbeddedRelay? relay,
     required this.directPool,
-  });
+    DiscoveryService? discovery,
+  })  : relay = relay ?? EmbeddedRelay.shared,
+        _discovery = discovery ?? DiscoveryService();
 
+  /// Relay de la app. Por defecto la instancia compartida, que sobrevive a los
+  /// cambios de pantalla.
   final EmbeddedRelay relay;
   final DirectTransferPool directPool;
+  final DiscoveryService _discovery;
 
   // ─── Public state ────────────────────────────────────────────────
 
@@ -34,6 +33,11 @@ class ServerController extends ChangeNotifier {
   // ─── Internal ────────────────────────────────────────────────────
 
   Timer? _scanTimer;
+  bool _scanPaused = false;
+  bool _disposed = false;
+
+  /// Intervalo entre barridos automáticos de la red en modo directo.
+  static const scanInterval = Duration(seconds: 30);
 
   bool get isDirectMode => !relay.isServerMode;
 
@@ -48,16 +52,19 @@ class ServerController extends ChangeNotifier {
       return relay.url;
     } catch (e) {
       AppLogger.instance.error('[ServerCtrl] relay start failed', error: e);
-      notifyListeners();
+      _notify();
       return null;
     }
   }
 
   /// Activates server mode on the relay. Returns the PIN on success, null if
-  /// the user cancelled or an error occurred.
+  /// the user cancelled.
   ///
   /// [checkWarning] — called to check if the server-mode warning dialog was
   /// dismissed. Should return `true` to proceed or `false` to cancel.
+  ///
+  /// La propia app recibe un token directamente del relay (sin HTTP) y lo
+  /// guarda en [transferService] y en el FilesService local.
   Future<String?> activateServerMode({
     required Future<bool> Function() checkWarning,
     required TransferService transferService,
@@ -74,31 +81,17 @@ class ServerController extends ChangeNotifier {
     AppLogger.instance.info('[ServerCtrl] activating server mode');
     try {
       stopDirectScanning();
+      directPool.disposeAll();
       final pin = await relay.startServerMode();
 
-      // Auto-authenticate to the local relay
-      final response = await http.post(
-        Uri.parse('http://127.0.0.1:${relay.port}/api/auth'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'pin': pin}),
-      );
+      final token = relay.issueLocalToken();
+      transferService.setToken(token);
 
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body) as Map<String, dynamic>;
-        final token = data['token'] as String;
-        transferService.setToken(token);
-        AppLogger.instance.info('[ServerCtrl] server mode auth OK');
-
-        final localConfig = ApiConfig('http://127.0.0.1:${relay.port}');
-        final localFilesService = FilesService(localConfig);
-        localFilesService.setToken(token);
-        setFilesService(localFilesService, localConfig);
-      } else {
-        AppLogger.instance.warn(
-          '[ServerCtrl] server mode auth failed: status ${response.statusCode}',
-        );
-      }
-
+      final localConfig = ApiConfig(relay.loopbackUrl);
+      final localFilesService = FilesService(localConfig)..setToken(token);
+      setFilesService(localFilesService, localConfig);
+      AppLogger.instance.info('[ServerCtrl] server mode active');
+      _notify();
       return pin;
     } catch (e) {
       AppLogger.instance.error('[ServerCtrl] activateServerMode error', error: e);
@@ -108,72 +101,60 @@ class ServerController extends ChangeNotifier {
 
   // ─── Auto-auth with local relay ────────────────────────────────
 
-  Future<bool> autoAuthWithRelay(TransferService transferService, FilesService? filesService) async {
-    AppLogger.instance.debug('[ServerCtrl] autoAuthWithRelay');
-    try {
-      final response = await http.post(
-        Uri.parse('http://127.0.0.1:${relay.port}/api/auth'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'pin': relay.currentPin}),
-      );
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body) as Map<String, dynamic>;
-        final token = data['token'] as String;
-        transferService.setToken(token);
-        filesService?.setToken(token);
-        AppLogger.instance.info('[ServerCtrl] auto-auth with relay OK');
-        return true;
-      }
-      AppLogger.instance.warn(
-        '[ServerCtrl] autoAuth failed: status ${response.statusCode}',
-      );
-      return false;
-    } catch (e) {
-      AppLogger.instance.error('[ServerCtrl] autoAuth error', error: e);
-      return false;
-    }
+  /// Renueva el token de la app contra su propio relay (p. ej. si caducó).
+  bool autoAuthWithRelay(TransferService transferService, FilesService? filesService) {
+    if (!relay.isServerMode) return false;
+    final token = relay.issueLocalToken();
+    transferService.setToken(token);
+    filesService?.setToken(token);
+    AppLogger.instance.info('[ServerCtrl] auto-auth with relay OK');
+    return true;
   }
 
   // ─── Direct mode scanning ──────────────────────────────────────
 
-  void initDirectPoolCallbacks({
-    required void Function(IncomingTransferRequest) onSendRequest,
-    required void Function(String) onSendAccept,
-    required void Function(String, String?) onSendReject,
-    required void Function(String) onSendCancel,
-    required void Function(String) onSendComplete,
-    required void Function(String, Uint8List) onBinaryChunk,
-  }) {
-    directPool.onSendRequest = onSendRequest;
-    directPool.onSendAccept = onSendAccept;
-    directPool.onSendReject = onSendReject;
-    directPool.onSendCancel = onSendCancel;
-    directPool.onSendComplete = onSendComplete;
-    directPool.onBinaryChunk = onBinaryChunk;
-  }
-
   void startDirectScanning() {
-    scanForDirectDevices();
-    _scanTimer = Timer.periodic(
-      const Duration(seconds: 5),
-      (_) => scanForDirectDevices(),
-    );
+    _scanTimer?.cancel();
+    unawaited(scanForDirectDevices());
+    _scanTimer = Timer.periodic(scanInterval, (_) {
+      if (!_scanPaused) unawaited(scanForDirectDevices());
+    });
   }
 
   void stopDirectScanning() {
     _scanTimer?.cancel();
     _scanTimer = null;
     directDevices = [];
-    notifyListeners();
+    _notify();
+  }
+
+  /// Pausa el barrido periódico (app en segundo plano).
+  void pauseScanning() => _scanPaused = true;
+
+  /// Reanuda el barrido y escanea enseguida si estaba en modo directo.
+  void resumeScanning() {
+    final wasPaused = _scanPaused;
+    _scanPaused = false;
+    if (wasPaused && _scanTimer != null) unawaited(scanForDirectDevices());
   }
 
   Future<void> scanForDirectDevices() async {
+    if (directScanning || _disposed) return; // evitar barridos solapados
     directScanning = true;
-    notifyListeners();
-    final devices = await DiscoveryService().scanLan();
-    directDevices = devices;
-    directScanning = false;
-    notifyListeners();
+    _notify();
+    try {
+      final devices = await _discovery.scanLan(isCancelled: () => _disposed);
+      final ownIp = relay.localIp;
+      // Solo teléfonos con relay y sin PIN aceptan envío directo.
+      directDevices = devices
+          .where((d) => d.acceptsDirectTransfer && d.ip != ownIp)
+          .toList();
+    } catch (e) {
+      AppLogger.instance.warn('[ServerCtrl] scan failed: $e');
+    } finally {
+      directScanning = false;
+      _notify();
+    }
   }
 
   /// Get a pool connection to a direct device. Returns null on failure.
@@ -183,13 +164,20 @@ class ServerController extends ChangeNotifier {
 
   void touchPool(String url) => directPool.touch(url);
 
+  void _notify() {
+    if (!_disposed) notifyListeners();
+  }
+
   // ─── Cleanup ────────────────────────────────────────────────────
 
+  /// Detiene el escaneo y el pool. El relay compartido sigue vivo, pero el
+  /// modo servidor se apaga al salir de la pantalla que lo activó.
   @override
   void dispose() {
+    _disposed = true;
     _scanTimer?.cancel();
     directPool.disposeAll();
-    relay.stop();
+    if (relay.isServerMode) unawaited(relay.stopServerMode());
     super.dispose();
   }
 }

@@ -5,18 +5,26 @@ import 'package:flutter/services.dart' show rootBundle;
 import 'package:mime/mime.dart';
 import '../mobile_server_storage_service.dart';
 
+/// Margen de espacio libre que se deja al aceptar una subida.
+const _freeSpaceMargin = 50 * 1024 * 1024;
+
 /// Handles all HTTP REST endpoints for the embedded relay's server mode:
 /// file listing, upload, download, delete, stats, config, health.
+///
+/// [storage] puede volverse null si el modo servidor se apaga durante una
+/// petición: cada handler lo lee una sola vez y responde 503 si falta.
 class RelayHttpHandler {
   MobileServerStorageService? storage;
 
   /// Callback to notify WS clients that files changed on the server.
-  VoidCallback? onFilesChanged;
+  void Function()? onFilesChanged;
 
   // ─── File endpoints ────────────────────────────────────────────────
 
   Future<void> handleListFiles(HttpRequest req) async {
-    final files = await storage!.listFiles();
+    final store = storage;
+    if (store == null) return _unavailable(req);
+    final files = await store.listFiles();
     final list = files
         .map((f) => {
               'name': f.name,
@@ -25,79 +33,124 @@ class RelayHttpHandler {
               'downloadUrl': f.downloadUrl,
             })
         .toList();
-    _jsonOk(req, {'files': list, 'count': list.length});
+    _json(req, HttpStatus.ok, {'files': list, 'count': list.length});
   }
 
+  /// Recibe `multipart/form-data` y escribe cada parte directo a disco, sin
+  /// acumular el archivo en memoria.
   Future<void> handleUpload(HttpRequest req) async {
-    final contentType = req.headers.contentType;
-    final boundary = contentType?.parameters['boundary'];
+    final store = storage;
+    if (store == null) return _unavailable(req);
+
+    final boundary = req.headers.contentType?.parameters['boundary'];
     if (boundary == null) {
-      req.response
-        ..statusCode = HttpStatus.badRequest
-        ..write('Missing boundary')
-        ..close();
+      _json(req, HttpStatus.badRequest, {'error': 'Missing boundary'});
       return;
+    }
+
+    // Comprobar espacio libre antes de aceptar (si el cliente informa tamaño).
+    final declared = req.contentLength;
+    if (declared > 0) {
+      final free = await getFreeDiskBytes();
+      if (free != null && declared + _freeSpaceMargin > free) {
+        _json(req, HttpStatus.insufficientStorage,
+            {'error': 'No hay espacio suficiente en el dispositivo'});
+        return;
+      }
     }
 
     final savedNames = <String>[];
-    final transformer = MimeMultipartTransformer(boundary);
-    final parts = await transformer.bind(req).toList();
-
-    for (final part in parts) {
+    final failed = <Map<String, String>>[];
+    await for (final part in MimeMultipartTransformer(boundary).bind(req)) {
       final disposition = part.headers['content-disposition'] ?? '';
-      final nameMatch = RegExp(r'filename="([^"]+)"').firstMatch(disposition);
-      if (nameMatch == null) continue;
-
-      final fileName = nameMatch.group(1)!;
-      final bytes = await part.fold<List<int>>([], (a, b) => a..addAll(b));
-      final saved = await storage!.saveFile(fileName, bytes);
-      savedNames.add(saved);
+      final fileName = _fileNameFromDisposition(disposition);
+      if (fileName == null) {
+        await part.drain<void>();
+        continue;
+      }
+      try {
+        savedNames.add(await store.saveStream(fileName, part));
+      } catch (e) {
+        failed.add({'name': fileName, 'reason': 'No se pudo guardar'});
+        await part.drain<void>().catchError((_) {});
+      }
     }
 
-    _jsonOk(req, {'message': 'Archivos subidos', 'files': savedNames});
-    onFilesChanged?.call();
+    if (savedNames.isEmpty && failed.isNotEmpty) {
+      _json(req, HttpStatus.internalServerError,
+          {'error': 'No se pudo guardar ningún archivo', 'failed': failed});
+      return;
+    }
+    _json(req, HttpStatus.ok, {
+      'message': 'Archivos subidos',
+      'files': savedNames,
+      if (failed.isNotEmpty) 'failed': failed,
+    });
+    if (savedNames.isNotEmpty) onFilesChanged?.call();
   }
 
   Future<void> handleDownload(HttpRequest req, String fileName) async {
-    final file = await storage!.getFile(fileName);
+    final store = storage;
+    if (store == null) return _unavailable(req);
+    final file = await store.getFile(fileName);
     if (file == null) {
-      req.response
-        ..statusCode = HttpStatus.notFound
-        ..write('Archivo no encontrado')
-        ..close();
+      _json(req, HttpStatus.notFound, {'error': 'Archivo no encontrado'});
       return;
     }
+    final length = await file.length();
     final mimeType = lookupMimeType(fileName) ?? 'application/octet-stream';
-    req.response
-      ..statusCode = HttpStatus.ok
-      ..headers.set(HttpHeaders.contentTypeHeader, mimeType)
-      ..headers.set(
-        'content-disposition',
-        'attachment; filename="${Uri.encodeComponent(fileName)}"',
-      );
-    await file.openRead().pipe(req.response);
-    await req.response.close();
+    final res = req.response;
+    res.headers
+      ..set(HttpHeaders.contentTypeHeader, mimeType)
+      ..set(HttpHeaders.acceptRangesHeader, 'bytes')
+      ..set('X-Content-Type-Options', 'nosniff')
+      ..set('content-disposition', _contentDisposition(fileName));
+
+    // Soporte básico de Range (un solo rango) para reanudar y para video.
+    final range = _parseRange(req.headers.value(HttpHeaders.rangeHeader), length);
+    if (range != null) {
+      res
+        ..statusCode = HttpStatus.partialContent
+        ..headers.set(HttpHeaders.contentRangeHeader, 'bytes ${range.start}-${range.end}/$length')
+        ..contentLength = range.end - range.start + 1;
+      await res.addStream(file.openRead(range.start, range.end + 1));
+    } else {
+      res
+        ..statusCode = HttpStatus.ok
+        ..contentLength = length;
+      await res.addStream(file.openRead());
+    }
+    await res.close();
   }
 
   Future<void> handleDeleteFile(HttpRequest req, String fileName) async {
-    await storage!.deleteFile(fileName);
-    _jsonOk(req, {'message': 'Eliminado'});
+    final store = storage;
+    if (store == null) return _unavailable(req);
+    final deleted = await store.deleteFile(fileName);
+    if (!deleted) {
+      _json(req, HttpStatus.notFound, {'error': 'Archivo no encontrado'});
+      return;
+    }
+    _json(req, HttpStatus.ok, {'message': 'Eliminado'});
     onFilesChanged?.call();
   }
 
   Future<void> handleStats(HttpRequest req) async {
-    final stats = await storage!.getStats();
-    _jsonOk(req, {'total': stats.total, 'used': stats.used, 'free': stats.free});
+    final store = storage;
+    if (store == null) return _unavailable(req);
+    final stats = await store.getStats();
+    _json(req, HttpStatus.ok, {'total': stats.total, 'used': stats.used, 'free': stats.free});
   }
 
   void handleConfig(HttpRequest req, {required String? localIp, required int port}) {
-    _jsonOk(req, {
+    _json(req, HttpStatus.ok, {
       'appName': 'SrvFiles Mobile',
       'lanIp': localIp ?? '',
       'port': port,
       'frontendPort': port,
+      // 0 = sin límite por archivo (el límite real es el espacio libre).
       'maxFileSizeMb': 0,
-      'lanUrl': 'http://${localIp ?? ''}:$port',
+      'lanUrl': localIp != null ? 'http://$localIp:$port' : '',
     });
   }
 
@@ -105,19 +158,18 @@ class RelayHttpHandler {
     required String? deviceName,
     required bool serverModeActive,
     required int clientCount,
+    required int port,
   }) {
-    req.response
-      ..statusCode = HttpStatus.ok
-      ..headers.contentType = ContentType.json
-      ..write(jsonEncode({
-        'status': 'ok',
-        'app': 'srvfiles',
-        'appName': deviceName ?? 'SrvFiles',
-        'relay': true,
-        'serverMode': serverModeActive,
-        'clients': clientCount,
-      }))
-      ..close();
+    _json(req, HttpStatus.ok, {
+      'status': 'ok',
+      'app': 'srvfiles',
+      'appName': deviceName ?? 'SrvFiles',
+      'relay': true,
+      'serverMode': serverModeActive,
+      'deviceType': 'mobile',
+      'port': port,
+      'clients': clientCount,
+    });
   }
 
   // ─── Static file serving ─────────────────────────────────────────
@@ -125,6 +177,7 @@ class RelayHttpHandler {
   Future<void> handleStaticFile(HttpRequest req) async {
     var path = req.uri.path;
     if (path == '/' || path.isEmpty) path = '/index.html';
+    if (path.contains('..')) path = '/index.html';
 
     final assetPath = 'assets/www$path';
     ByteData? data;
@@ -137,8 +190,8 @@ class RelayHttpHandler {
       } catch (_) {
         req.response
           ..statusCode = HttpStatus.notFound
-          ..write('Not found')
-          ..close();
+          ..write('Not found');
+        await req.response.close();
         return;
       }
     }
@@ -156,12 +209,65 @@ class RelayHttpHandler {
 
   // ─── Helpers ──────────────────────────────────────────────────────
 
-  void _jsonOk(HttpRequest req, Map<String, dynamic> body) {
+  void _json(HttpRequest req, int status, Map<String, dynamic> body) {
     req.response
-      ..statusCode = HttpStatus.ok
+      ..statusCode = status
       ..headers.contentType = ContentType.json
       ..write(jsonEncode(body))
       ..close();
+  }
+
+  void _unavailable(HttpRequest req) => _json(
+      req, HttpStatus.serviceUnavailable, {'error': 'Modo servidor inactivo'});
+
+  /// Extrae el nombre de archivo de `Content-Disposition`, aceptando tanto
+  /// `filename="…"` como `filename*=UTF-8''…`.
+  static String? _fileNameFromDisposition(String disposition) {
+    final star = RegExp(r"filename\*=UTF-8''([^;]+)", caseSensitive: false)
+        .firstMatch(disposition);
+    if (star != null) {
+      try {
+        return Uri.decodeComponent(star.group(1)!.trim());
+      } catch (_) {}
+    }
+    final plain = RegExp(r'filename="([^"]*)"').firstMatch(disposition);
+    final name = plain?.group(1);
+    if (name == null || name.isEmpty) return null;
+    // Los navegadores mandan el nombre en UTF-8, pero el parser multipart
+    // decodifica las cabeceras como Latin-1 ("año" llega como "aÃ±o").
+    try {
+      return utf8.decode(latin1.encode(name));
+    } catch (_) {
+      return name;
+    }
+  }
+
+  /// `attachment` con nombre ASCII de respaldo y `filename*` en UTF-8 (RFC 6266).
+  static String _contentDisposition(String fileName) {
+    final ascii = fileName.replaceAll(RegExp(r'[^\x20-\x7e]|["\\]'), '_');
+    return 'attachment; filename="$ascii"; '
+        "filename*=UTF-8''${Uri.encodeComponent(fileName)}";
+  }
+
+  static ({int start, int end})? _parseRange(String? header, int length) {
+    if (header == null || length == 0) return null;
+    final m = RegExp(r'^bytes=(\d*)-(\d*)$').firstMatch(header.trim());
+    if (m == null) return null;
+    final startStr = m.group(1)!;
+    final endStr = m.group(2)!;
+    int start;
+    int end;
+    if (startStr.isEmpty) {
+      if (endStr.isEmpty) return null;
+      final suffix = int.parse(endStr);
+      start = (length - suffix).clamp(0, length - 1);
+      end = length - 1;
+    } else {
+      start = int.parse(startStr);
+      end = endStr.isEmpty ? length - 1 : int.parse(endStr).clamp(0, length - 1);
+    }
+    if (start > end || start >= length) return null;
+    return (start: start, end: end);
   }
 
   static String _staticMimeType(String path) {
@@ -180,5 +286,3 @@ class RelayHttpHandler {
     return 'application/octet-stream';
   }
 }
-
-typedef VoidCallback = void Function();

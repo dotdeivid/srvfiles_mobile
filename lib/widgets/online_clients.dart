@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../config/api_config.dart';
 import '../theme/app_colors.dart';
 import '../models/transfer_client.dart';
 import '../models/active_transfer.dart';
@@ -227,7 +228,7 @@ class _ClientRow extends StatelessWidget {
                               ? null
                               : () {
                                   HapticFeedback.lightImpact();
-                                  onViewServer!('http://${client.ip}:3001');
+                                  onViewServer!('http://${client.ip}:$defaultServerPort');
                                 },
                           icon: const Icon(Icons.folder_open_rounded, size: 14),
                           label: const Text('Ver', style: TextStyle(fontSize: 12)),

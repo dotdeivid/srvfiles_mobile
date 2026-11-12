@@ -1,23 +1,29 @@
-import 'dart:typed_data';
+import '../../services/received_files_service.dart';
+import '../../services/transfer_service.dart';
 
-/// Buffer that accumulates incoming binary chunks during a P2P file transfer.
+/// Estado de una recepción P2P en curso.
 ///
-/// Created when this device accepts an incoming transfer request. Each binary
-/// chunk from the sender is appended to [chunks] and [received] is incremented
-/// by the chunk size. When `received >= total` the transfer is complete and the
-/// caller assembles the final file from [chunks].
+/// Los chunks se escriben directo a disco ([sink], un archivo `.part`) en vez
+/// de acumularse en memoria. Al llegar `send-complete` se comprueba que
+/// [received] coincida con [total] antes de guardar el archivo.
 class ReceiveBuffer {
-  final List<Uint8List> chunks;
+  final ReceivedFileSink sink;
+
+  /// Conexión por la que llega la transferencia (principal o del pool).
+  final TransferService service;
   int received;
   final int total;
   final String fileName;
   final String mimeType;
+  final String peerName;
 
   ReceiveBuffer({
-    required this.chunks,
-    required this.received,
+    required this.sink,
+    required this.service,
     required this.total,
     required this.fileName,
     required this.mimeType,
+    required this.peerName,
+    this.received = 0,
   });
 }

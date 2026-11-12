@@ -12,9 +12,9 @@ class FileInfo {
   });
 
   factory FileInfo.fromJson(Map<String, dynamic> json) => FileInfo(
-        name: json['name'] as String,
-        size: json['size'] as int,
-        createdAt: json['createdAt'] as String,
-        downloadUrl: json['downloadUrl'] as String,
+        name: (json['name'] as String?) ?? '',
+        size: (json['size'] as num?)?.toInt() ?? 0,
+        createdAt: (json['createdAt'] as String?) ?? '',
+        downloadUrl: (json['downloadUrl'] as String?) ?? '',
       );
 }

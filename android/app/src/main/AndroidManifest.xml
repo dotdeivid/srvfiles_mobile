@@ -3,31 +3,29 @@
     <!-- Acceso a internet para conectarse al servidor en la LAN -->
     <uses-permission android:name="android.permission.INTERNET" />
 
-    <!-- Mantener CPU activa y conexión de red al bloquear pantalla -->
-    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Servicio en primer plano para mantener la conexión al bloquear pantalla -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
     <!-- Notificaciones (Android 13+) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
-    <!-- Leer archivos del almacenamiento (para subir) -->
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
-
-    <!-- Escribir archivos en el almacenamiento (para descargar) -->
+    <!-- Escribir en Download/SrvFiles en Android <= 9. Si no está concedido,
+         la app guarda en su almacenamiento propio. Para elegir archivos no
+         hace falta ningún permiso: file_picker usa el selector del sistema. -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
-
-    <!-- En Android 13+ se usan permisos granulares -->
-    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
-    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
-    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
 
     <application
         android:label="SrvFiles"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
+        android:requestLegacyExternalStorage="true"
         android:usesCleartextTraffic="true">
+        <!-- usesCleartextTraffic: los servidores SrvFiles de la LAN son HTTP en
+             IPs arbitrarias; network_security_config no permite limitar por
+             rango de IP, así que el tráfico en claro queda habilitado.
+             requestLegacyExternalStorage: escribir en Download/ en Android 10. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"

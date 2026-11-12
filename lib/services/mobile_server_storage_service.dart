@@ -1,12 +1,51 @@
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import '../models/file_info.dart';
 import '../models/disk_stats.dart';
+import '../utils/file_names.dart';
 import 'app_logger.dart';
 
 const _diskChannel = MethodChannel('com.srvfiles/disk_space');
+
+/// Lista los archivos de [dir] ordenados por fecha de modificación (más
+/// reciente primero), con E/S asíncrona. [urlFor] construye `downloadUrl`.
+Future<List<FileInfo>> listFilesIn(
+  Directory dir,
+  String Function(File file, String name) urlFor,
+) async {
+  if (!await dir.exists()) return [];
+  final entries = <({File file, FileStat stat})>[];
+  await for (final entity in dir.list(followLinks: false)) {
+    if (entity is! File) continue;
+    final name = p.basename(entity.path);
+    if (name.endsWith('.part')) continue; // subida o recepción en curso
+    entries.add((file: entity, stat: await entity.stat()));
+  }
+  entries.sort((a, b) => b.stat.modified.compareTo(a.stat.modified));
+  return entries.map((e) {
+    final name = p.basename(e.file.path);
+    return FileInfo(
+      name: name,
+      size: e.stat.size,
+      createdAt: e.stat.modified.toIso8601String(),
+      downloadUrl: urlFor(e.file, name),
+    );
+  }).toList();
+}
+
+/// Espacio libre del dispositivo en bytes, o null si no se pudo obtener.
+Future<int?> getFreeDiskBytes() async {
+  try {
+    final freeMb = await _diskChannel.invokeMethod<double>('getFreeDiskSpace');
+    return freeMb == null ? null : (freeMb * 1024 * 1024).round();
+  } catch (e) {
+    AppLogger.instance.warn('[Storage] could not get free disk space: $e');
+    return null;
+  }
+}
 
 /// Gestiona el directorio de archivos del servidor móvil.
 /// Los archivos se guardan en Documents/SrvFiles/server/.
@@ -24,7 +63,7 @@ class MobileServerStorageService {
   Future<Directory> getDirectory() async {
     if (_dir != null) return _dir!;
     final baseDir = await getApplicationDocumentsDirectory();
-    final dir = Directory('${baseDir.path}/SrvFiles/server');
+    final dir = Directory(p.join(baseDir.path, 'SrvFiles', 'server'));
     if (!await dir.exists()) {
       await dir.create(recursive: true);
     }
@@ -35,74 +74,77 @@ class MobileServerStorageService {
   /// Lista los archivos ordenados por fecha de modificación (más reciente primero).
   Future<List<FileInfo>> listFiles() async {
     final dir = await getDirectory();
-    if (!await dir.exists()) return [];
-
-    final entities = dir.listSync().whereType<File>().toList();
-    entities.sort((a, b) {
-      return b.statSync().modified.compareTo(a.statSync().modified);
-    });
-
-    return entities.map((file) {
-      final stat = file.statSync();
-      final name = file.path.split('/').last;
-      return FileInfo(
-        name: name,
-        size: stat.size,
-        createdAt: stat.modified.toIso8601String(),
-        downloadUrl: '/api/files/download/${Uri.encodeComponent(name)}',
-      );
-    }).toList();
+    return listFilesIn(
+      dir,
+      (_, name) => '/api/files/download/${Uri.encodeComponent(name)}',
+    );
   }
 
   /// Guarda bytes en el directorio del servidor. Retorna el nombre final del archivo.
-  Future<String> saveFile(String fileName, List<int> bytes) async {
+  Future<String> saveFile(String fileName, List<int> bytes) =>
+      saveStream(fileName, Stream.value(bytes));
+
+  /// Guarda un stream en el directorio del servidor sin cargarlo en memoria.
+  /// Escribe primero a `<nombre>.part` y renombra al terminar, para que un
+  /// archivo a medio subir no aparezca en la lista. Retorna el nombre final.
+  Future<String> saveStream(String fileName, Stream<List<int>> data) async {
+    File? partFile;
     try {
       final dir = await getDirectory();
-      final sanitized = _sanitize(fileName);
-      var target = File('${dir.path}/$sanitized');
-
-      if (await target.exists()) {
-        final ext = sanitized.contains('.') ? '.${sanitized.split('.').last}' : '';
-        final base =
-            ext.isNotEmpty ? sanitized.substring(0, sanitized.length - ext.length) : sanitized;
-        var i = 1;
-        while (await target.exists()) {
-          target = File('${dir.path}/$base ($i)$ext');
-          i++;
+      final target = await uniqueFileIn(dir, sanitizeFileName(fileName));
+      partFile = File('${target.path}.part');
+      final sink = partFile.openWrite();
+      var written = 0;
+      try {
+        await for (final chunk in data) {
+          sink.add(chunk);
+          written += chunk.length;
         }
+        await sink.flush();
+      } finally {
+        await sink.close();
       }
-
-      await target.writeAsBytes(bytes);
-      final finalName = target.path.split('/').last;
-      AppLogger.instance.info('[MobileServerStorage] saved file: $finalName (${bytes.length} bytes)');
+      // El nombre pudo ocuparse mientras se subía: volver a resolver.
+      final finalTarget = await uniqueFileIn(dir, p.basename(target.path));
+      await partFile.rename(finalTarget.path);
+      final finalName = p.basename(finalTarget.path);
+      AppLogger.instance.info('[MobileServerStorage] saved file: $finalName ($written bytes)');
       return finalName;
     } catch (e) {
       AppLogger.instance.error('[MobileServerStorage] saveFile failed', error: e);
+      try {
+        if (partFile != null && await partFile.exists()) await partFile.delete();
+      } catch (_) {}
       rethrow;
     }
   }
 
-  /// Elimina un archivo por nombre.
-  Future<void> deleteFile(String fileName) async {
+  /// Elimina un archivo por nombre. Devuelve false si no existe o el nombre
+  /// no es válido (rutas, `..`).
+  Future<bool> deleteFile(String fileName) async {
     try {
-      final dir = await getDirectory();
-      final file = File('${dir.path}/$fileName');
+      final file = resolveInside(await getDirectory(), fileName);
+      if (file == null) {
+        AppLogger.instance.warn('[MobileServerStorage] deleteFile: invalid name rejected');
+        return false;
+      }
       if (await file.exists()) {
         await file.delete();
         AppLogger.instance.info('[MobileServerStorage] deleted file: $fileName');
-      } else {
-        AppLogger.instance.warn('[MobileServerStorage] deleteFile: file not found: $fileName');
+        return true;
       }
+      AppLogger.instance.warn('[MobileServerStorage] deleteFile: file not found: $fileName');
+      return false;
     } catch (e) {
       AppLogger.instance.error('[MobileServerStorage] deleteFile failed', error: e);
       rethrow;
     }
   }
 
-  /// Retorna el path completo de un archivo por nombre. Null si no existe.
+  /// Retorna el archivo por nombre. Null si no existe o el nombre no es válido.
   Future<File?> getFile(String fileName) async {
-    final dir = await getDirectory();
-    final file = File('${dir.path}/$fileName');
+    final file = resolveInside(await getDirectory(), fileName);
+    if (file == null) return null;
     return await file.exists() ? file : null;
   }
 
@@ -111,8 +153,8 @@ class MobileServerStorageService {
     final dir = await getDirectory();
     int used = 0;
     if (await dir.exists()) {
-      for (final entity in dir.listSync().whereType<File>()) {
-        used += entity.statSync().size;
+      await for (final entity in dir.list(followLinks: false)) {
+        if (entity is File) used += (await entity.stat()).size;
       }
     }
 
@@ -128,13 +170,5 @@ class MobileServerStorageService {
     }
 
     return DiskStats(total: total, used: used, free: free);
-  }
-
-  /// Sanitiza el nombre de archivo: elimina path traversal y caracteres no válidos.
-  String _sanitize(String name) {
-    var result = name.replaceAll(RegExp(r'[/\\:*?"<>|]'), '_');
-    result = result.replaceAll(RegExp(r'\.{2,}'), '_');
-    result = result.trim();
-    return result.isEmpty ? 'archivo' : result;
   }
 }

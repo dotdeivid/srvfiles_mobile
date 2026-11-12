@@ -37,9 +37,6 @@ dependencies:
   # HTTP para la API REST
   http: ^1.2.1
 
-  # WebSocket para P2P
-  web_socket_channel: ^2.4.5
-
   # Selector de archivos (galería, documentos, etc.)
   file_picker: ^8.0.3
 
@@ -68,11 +65,15 @@ dependencies:
   # Abrir URLs en el navegador externo
   url_launcher: ^6.3.0
 
-  # Hash SHA-256 para el PIN del servidor
-  crypto: ^3.0.3
-
-  # Cifrado E2E: ECDH P-256 + HKDF + AES-256-GCM
+  # Cifrado del canal WebSocket (salto a salto): ECDH P-256 + HKDF + AES-256-GCM.
+  # pointycastle hace el ECDH en Dart puro (Ecdh.p256 de `cryptography` no está
+  # implementado sin plugin); cryptography_flutter usa AES-GCM nativo en el dispositivo.
   cryptography: ^2.7.0
+  cryptography_flutter: ^2.3.4
+  pointycastle: ^4.0.0
+
+  # Manejo de rutas y nombres de archivo
+  path: ^1.9.1
 
   # Previsualizador de archivos
   photo_view: ^0.14.0
@@ -84,8 +85,6 @@ dependencies:
 
   # Parsing de multipart/form-data en el servidor embebido
   mime: ^1.0.6
-
-  # Espacio en disco del dispositivo (total y libre)
 
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
@@ -108,9 +107,9 @@ dev_dependencies:
 flutter_launcher_icons:
   android: true
   ios: true
-  image_path: "../src-tauri/icons/icon.png"
+  image_path: "../srvfiles_web/src-tauri/icons/icon.png"
   adaptive_icon_background: "#0a0a0f"
-  adaptive_icon_foreground: "../src-tauri/icons/icon.png"
+  adaptive_icon_foreground: "../srvfiles_web/src-tauri/icons/icon.png"
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec

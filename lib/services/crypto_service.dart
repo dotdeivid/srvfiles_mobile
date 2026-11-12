@@ -1,18 +1,37 @@
 import 'dart:convert';
+import 'dart:math';
 import 'dart:typed_data';
 import 'package:cryptography/cryptography.dart';
+import 'package:pointycastle/export.dart' as pc;
 
 /// ECDH P-256 + HKDF-SHA-256 + AES-256-GCM session cipher.
 ///
-/// Compatible with the Web Crypto API and Node.js webcrypto:
+/// Compatible with the Web Crypto API and the Go backend:
 /// - P-256 public keys: 65 bytes (0x04 prefix + 32-byte x + 32-byte y)
+/// - Shared secret: 32-byte x coordinate (Web Crypto `deriveBits(…, 256)`)
 /// - AES-GCM ciphertext format: [cipherText][16-byte GCM tag]
 /// - Binary frame format: [12-byte nonce][cipherText][16-byte GCM tag]
+///
+/// El ECDH se hace con pointycastle (Dart puro): `Ecdh.p256()` del paquete
+/// `cryptography` lanza `UnimplementedError` sin plugin nativo, y eso dejaba
+/// todas las sesiones sin cifrar. AES-GCM y HKDF siguen en `cryptography`
+/// (nativos en el dispositivo cuando `FlutterCryptography.enable()` está activo).
+///
+/// Nota: el cifrado es salto a salto (cliente ↔ relay). El relay descifra y
+/// vuelve a cifrar para el receptor, así que quien opera el relay puede ver el
+/// contenido. El intercambio de claves no está autenticado.
 
 const _hkdfInfo = 'srvfiles-ws-v1';
 
+// Parámetros de la curva P-256 (secp256r1) para validar claves públicas.
+final _p = BigInt.parse(
+    'ffffffff00000001000000000000000000000000ffffffffffffffffffffffff', radix: 16);
+final _a = _p - BigInt.from(3);
+final _b = BigInt.parse(
+    '5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b', radix: 16);
+
 class CryptoService {
-  static final _ecdh = Ecdh.p256(length: 32);
+  static final _domain = pc.ECDomainParameters('secp256r1');
   static final _hkdf = Hkdf(hmac: Hmac.sha256(), outputLength: 32);
 
   /// Client-side key exchange:
@@ -23,15 +42,13 @@ class CryptoService {
     required void Function(String pubKeyB64) sendPublicKey,
     required Future<String> Function() waitForPeerKey,
   }) async {
-    final keyPair = await _ecdh.newKeyPair();
-    final pubKey = await keyPair.extractPublicKey();
-    final pubKeyBytes = Uint8List.fromList([0x04, ...pubKey.x, ...pubKey.y]);
-    sendPublicKey(base64.encode(pubKeyBytes));
+    final keyPair = _generateKeyPair();
+    sendPublicKey(base64.encode(_encodePublicKey(keyPair.publicKey)));
 
     final peerPubKeyB64 = await waitForPeerKey();
     if (peerPubKeyB64.isEmpty) return null;
 
-    return _deriveCipher(keyPair, peerPubKeyB64);
+    return _deriveCipher(keyPair.privateKey, peerPubKeyB64);
   }
 
   /// Server-side key exchange:
@@ -41,48 +58,106 @@ class CryptoService {
   static Future<({SessionCipher cipher, String serverPublicKey})> serverKeyExchange(
     String clientPublicKeyB64,
   ) async {
-    final serverKeyPair = await _ecdh.newKeyPair();
-    final serverPubKey = await serverKeyPair.extractPublicKey();
-    final serverPubKeyBytes = Uint8List.fromList([0x04, ...serverPubKey.x, ...serverPubKey.y]);
-    final cipher = await _deriveCipher(serverKeyPair, clientPublicKeyB64);
-    return (cipher: cipher, serverPublicKey: base64.encode(serverPubKeyBytes));
+    final keyPair = _generateKeyPair();
+    final cipher = await _deriveCipher(keyPair.privateKey, clientPublicKeyB64);
+    return (
+      cipher: cipher,
+      serverPublicKey: base64.encode(_encodePublicKey(keyPair.publicKey)),
+    );
   }
 
-  /// Derives a [SessionCipher] from a local key pair and the peer's base64 public key.
-  /// The peer's public key must be 65 bytes (0x04 + x + y) encoded as base64.
-  static Future<SessionCipher> _deriveCipher(EcKeyPair keyPair, String peerPublicKeyB64) async {
+  // ─── Internos ──────────────────────────────────────────────────────
+
+  static ({pc.ECPrivateKey privateKey, pc.ECPublicKey publicKey}) _generateKeyPair() {
+    final generator = pc.ECKeyGenerator()
+      ..init(pc.ParametersWithRandom(
+        pc.ECKeyGeneratorParameters(_domain),
+        _secureRandom(),
+      ));
+    final pair = generator.generateKeyPair();
+    return (
+      privateKey: pair.privateKey,
+      publicKey: pair.publicKey,
+    );
+  }
+
+  static pc.SecureRandom _secureRandom() {
+    final rng = Random.secure();
+    final seed = Uint8List.fromList(List.generate(32, (_) => rng.nextInt(256)));
+    return pc.FortunaRandom()..seed(pc.KeyParameter(seed));
+  }
+
+  static Uint8List _encodePublicKey(pc.ECPublicKey key) =>
+      key.Q!.getEncoded(false); // 0x04 || x || y
+
+  /// Derives a [SessionCipher] from a local private key and the peer's base64 public key.
+  /// The peer's public key must be 65 bytes (0x04 + x + y) and lie on P-256.
+  static Future<SessionCipher> _deriveCipher(
+    pc.ECPrivateKey privateKey,
+    String peerPublicKeyB64,
+  ) async {
     final peerBytes = base64.decode(peerPublicKeyB64);
     if (peerBytes.length != 65 || peerBytes[0] != 0x04) {
-      throw ArgumentError('Expected 65-byte uncompressed P-256 public key (0x04 prefix), got ${peerBytes.length} bytes');
+      throw ArgumentError(
+        'Expected 65-byte uncompressed P-256 public key (0x04 prefix), got ${peerBytes.length} bytes',
+      );
     }
-    final x = peerBytes.sublist(1, 33);
-    final y = peerBytes.sublist(33, 65);
-    final peerPublicKey = EcPublicKey(x: x, y: y, type: KeyPairType.p256);
+    final x = _toBigInt(peerBytes.sublist(1, 33));
+    final y = _toBigInt(peerBytes.sublist(33, 65));
+    if (!_isOnCurve(x, y)) {
+      throw ArgumentError('Peer public key is not a valid P-256 point');
+    }
+    final peerPoint = _domain.curve.decodePoint(peerBytes)!;
+    final peerKey = pc.ECPublicKey(peerPoint, _domain);
 
-    final sharedSecret = await _ecdh.sharedSecretKey(
-      keyPair: keyPair,
-      remotePublicKey: peerPublicKey,
-    );
+    final agreement = pc.ECDHBasicAgreement()..init(privateKey);
+    final shared = _toBytes(agreement.calculateAgreement(peerKey), 32);
 
     final derivedKey = await _hkdf.deriveKey(
-      secretKey: sharedSecret,
+      secretKey: SecretKey(shared),
       nonce: const [],
       info: utf8.encode(_hkdfInfo),
     );
 
     final keyBytes = await derivedKey.extractBytes();
-    return SessionCipher(SecretKey(keyBytes), keyBytes);
+    return SessionCipher(SecretKey(keyBytes));
+  }
+
+  static bool _isOnCurve(BigInt x, BigInt y) {
+    if (x >= _p || y >= _p || x.isNegative || y.isNegative) return false;
+    final left = (y * y) % _p;
+    final right = (x * x * x + _a * x + _b) % _p;
+    return left == right;
+  }
+
+  static BigInt _toBigInt(List<int> bytes) {
+    var result = BigInt.zero;
+    for (final b in bytes) {
+      result = (result << 8) | BigInt.from(b);
+    }
+    return result;
+  }
+
+  static Uint8List _toBytes(BigInt value, int length) {
+    final out = Uint8List(length);
+    var v = value;
+    for (var i = length - 1; i >= 0; i--) {
+      out[i] = (v & BigInt.from(0xff)).toInt();
+      v = v >> 8;
+    }
+    return out;
   }
 }
 
 /// AES-256-GCM cipher for a single WebSocket session.
 class SessionCipher {
   final SecretKey _key;
-  /// Raw key bytes — exposed for isolate-based encryption via compute().
-  final List<int> keyBytes;
   static final _aesGcm = AesGcm.with256bits();
 
-  SessionCipher(this._key, this.keyBytes);
+  static const _nonceLength = 12;
+  static const _tagLength = 16;
+
+  SessionCipher(this._key);
 
   /// Encrypts [plaintext] (JSON string) and returns `{'iv': ..., 'data': ...}`.
   /// The `data` field is base64([cipherText][16-byte GCM tag]).
@@ -94,7 +169,10 @@ class SessionCipher {
       nonce: nonce,
     );
     // Combine cipherText + GCM tag — matches Web Crypto API output format
-    final combined = Uint8List.fromList([...secretBox.cipherText, ...secretBox.mac.bytes]);
+    final combined = (BytesBuilder(copy: false)
+          ..add(secretBox.cipherText)
+          ..add(secretBox.mac.bytes))
+        .takeBytes();
     return {
       'iv': base64.encode(nonce),
       'data': base64.encode(combined),
@@ -105,9 +183,13 @@ class SessionCipher {
   Future<String> decryptJson(String iv, String data) async {
     final nonce = base64.decode(iv);
     final combined = base64.decode(data);
-    final cipherText = combined.sublist(0, combined.length - 16);
-    final mac = Mac(combined.sublist(combined.length - 16));
-    final secretBox = SecretBox(cipherText, nonce: nonce, mac: mac);
+    if (combined.length < _tagLength) throw ArgumentError('Ciphertext too short');
+    final split = combined.length - _tagLength;
+    final secretBox = SecretBox(
+      Uint8List.sublistView(combined, 0, split),
+      nonce: nonce,
+      mac: Mac(Uint8List.sublistView(combined, split)),
+    );
     final plainBytes = await _aesGcm.decrypt(secretBox, secretKey: _key);
     return utf8.decode(plainBytes);
   }
@@ -120,21 +202,25 @@ class SessionCipher {
       secretKey: _key,
       nonce: nonce,
     );
-    return Uint8List.fromList([
-      ...nonce,
-      ...secretBox.cipherText,
-      ...secretBox.mac.bytes,
-    ]);
+    return (BytesBuilder(copy: false)
+          ..add(nonce)
+          ..add(secretBox.cipherText)
+          ..add(secretBox.mac.bytes))
+        .takeBytes();
   }
 
   /// Decrypts a binary frame with format `[12-byte nonce][cipherText][16-byte GCM tag]`.
   Future<Uint8List> decryptBinary(Uint8List data) async {
-    final nonce = data.sublist(0, 12);
-    final combined = data.sublist(12);
-    final cipherText = combined.sublist(0, combined.length - 16);
-    final mac = Mac(combined.sublist(combined.length - 16));
-    final secretBox = SecretBox(cipherText, nonce: nonce, mac: mac);
+    if (data.length < _nonceLength + _tagLength) {
+      throw ArgumentError('Encrypted frame too short');
+    }
+    final tagStart = data.length - _tagLength;
+    final secretBox = SecretBox(
+      Uint8List.sublistView(data, _nonceLength, tagStart),
+      nonce: Uint8List.sublistView(data, 0, _nonceLength),
+      mac: Mac(Uint8List.sublistView(data, tagStart)),
+    );
     final plainBytes = await _aesGcm.decrypt(secretBox, secretKey: _key);
-    return Uint8List.fromList(plainBytes);
+    return plainBytes is Uint8List ? plainBytes : Uint8List.fromList(plainBytes);
   }
 }

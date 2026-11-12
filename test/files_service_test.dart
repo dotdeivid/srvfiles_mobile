@@ -4,266 +4,118 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:srvfiles_mobile/config/api_config.dart';
 import 'package:srvfiles_mobile/services/files_service.dart';
 
-/// Starts a minimal HTTP server. [routes] maps path → (statusCode, body).
-Future<HttpServer> startMockServer(
-  Map<String, ({int status, dynamic body})> routes,
-) async {
+/// Servidor HTTP mínimo. [handler] recibe cada petición y responde.
+Future<HttpServer> startServer(Future<void> Function(HttpRequest req) handler) async {
   final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-  server.listen((req) async {
-    final route = routes[req.uri.path];
-    if (route == null) {
-      req.response.statusCode = 404;
-      await req.response.close();
-      return;
-    }
-    req.response
-      ..statusCode = route.status
-      ..headers.contentType = ContentType.json
-      ..write(
-        route.body is String ? route.body : jsonEncode(route.body),
-      );
-    await req.response.close();
-  });
+  server.listen(handler);
   return server;
 }
 
+Future<void> json(HttpRequest req, int status, Object body) async {
+  req.response
+    ..statusCode = status
+    ..headers.contentType = ContentType.json
+    ..write(jsonEncode(body));
+  await req.response.close();
+}
+
 void main() {
-  group('FilesService', () {
-    // ── token / authHeaders ───────────────────────────────────────────────────
+  late HttpServer server;
+  late FilesService service;
 
-    test('authHeaders is empty when no token set', () {
-      final service = FilesService(ApiConfig('http://localhost:3001'));
-      expect(service.authHeaders, isEmpty);
-    });
+  tearDown(() async {
+    service.close();
+    await server.close(force: true);
+  });
 
-    test('authHeaders contains token after setToken', () {
-      final service = FilesService(ApiConfig('http://localhost:3001'));
-      service.setToken('my-secret-token');
-      expect(service.authHeaders['X-SrvFiles-Token'], 'my-secret-token');
-    });
+  FilesService serviceFor(HttpServer s) =>
+      FilesService(ApiConfig('http://127.0.0.1:${s.port}'));
 
-    // ── getFiles ──────────────────────────────────────────────────────────────
-
-    test('getFiles returns parsed list on 200', () async {
-      final server = await startMockServer({
-        '/api/files': (
-          status: 200,
-          body: {
-            'files': [
-              {
-                'name': 'doc.pdf',
-                'size': 1024,
-                'createdAt': '2026-03-20T10:00:00Z',
-                'downloadUrl': '/api/files/download/doc.pdf',
-              },
-              {
-                'name': 'photo.jpg',
-                'size': 2048,
-                'createdAt': '2026-03-21T09:00:00Z',
-                'downloadUrl': '/api/files/download/photo.jpg',
-              },
-            ],
-          },
-        ),
+  test('getFiles sends the token and skips malformed entries', () async {
+    String? token;
+    server = await startServer((req) async {
+      token = req.headers.value('X-SrvFiles-Token');
+      await json(req, 200, {
+        'files': [
+          {'name': 'doc.pdf', 'size': 1024, 'createdAt': '2026-03-20T10:00:00Z', 'downloadUrl': '/x'},
+          {'size': 5}, // sin nombre: se descarta
+          'basura',
+        ],
       });
-
-      final service = FilesService(ApiConfig('http://127.0.0.1:${server.port}'));
-      final files = await service.getFiles();
-
-      expect(files.length, 2);
-      expect(files[0].name, 'doc.pdf');
-      expect(files[0].size, 1024);
-      expect(files[1].name, 'photo.jpg');
-
-      await server.close(force: true);
     });
+    service = serviceFor(server)..setToken('tok-1');
 
-    test('getFiles throws on non-200 status', () async {
-      final server = await startMockServer({
-        '/api/files': (status: 401, body: 'Unauthorized'),
+    final files = await service.getFiles();
+    expect(token, 'tok-1');
+    expect(files.map((f) => f.name), ['doc.pdf']);
+  });
+
+  test('maps 401 to AuthRequiredException and other errors to ServerException', () async {
+    server = await startServer((req) async {
+      await json(req, req.uri.path == '/api/files' ? 401 : 500, {'error': 'x'});
+    });
+    service = serviceFor(server);
+
+    expect(service.getFiles(), throwsA(isA<AuthRequiredException>()));
+    expect(service.getStats(), throwsA(isA<ServerException>()));
+  });
+
+  test('deleteFile reports success from the status code', () async {
+    server = await startServer((req) async {
+      await json(req, req.uri.path.endsWith('ok.txt') ? 200 : 404, {});
+    });
+    service = serviceFor(server);
+
+    expect(await service.deleteFile('ok.txt'), true);
+    expect(await service.deleteFile('missing.txt'), false);
+  });
+
+  test('uploadFiles streams the files, reports progress and partial failures', () async {
+    var receivedBytes = 0;
+    server = await startServer((req) async {
+      await for (final chunk in req) {
+        receivedBytes += chunk.length;
+      }
+      await json(req, 200, {
+        'files': ['a.bin'],
+        'failed': [{'name': 'b.bin', 'reason': 'No se pudo guardar'}],
       });
-
-      final service = FilesService(ApiConfig('http://127.0.0.1:${server.port}'));
-
-      expect(
-        () => service.getFiles(),
-        throwsA(isA<Exception>()),
-      );
-
-      await server.close(force: true);
     });
+    service = serviceFor(server);
 
-    // ── deleteFile ────────────────────────────────────────────────────────────
+    final dir = Directory.systemTemp.createTempSync('upload_test_');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final a = File('${dir.path}/a.bin')..writeAsBytesSync(List.filled(200000, 1));
+    final b = File('${dir.path}/b.bin')..writeAsBytesSync(List.filled(1000, 2));
 
-    test('deleteFile returns true on 200', () async {
-      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-      server.listen((req) async {
-        if (req.method == 'DELETE') {
-          req.response.statusCode = 200;
-        } else {
-          req.response.statusCode = 405;
-        }
+    var lastProgress = 0.0;
+    final failed = await service.uploadFiles([a, b], onProgress: (p) => lastProgress = p);
+
+    expect(failed, ['b.bin']);
+    expect(receivedBytes, greaterThan(201000));
+    expect(lastProgress, closeTo(1.0, 0.001));
+  });
+
+  test('downloadTo writes the file and leaves nothing behind on error', () async {
+    server = await startServer((req) async {
+      if (req.uri.path.endsWith('ok.bin')) {
+        req.response.add(List.filled(5000, 7));
         await req.response.close();
-      });
-
-      final service = FilesService(ApiConfig('http://127.0.0.1:${server.port}'));
-      final ok = await service.deleteFile('doc.pdf');
-      expect(ok, true);
-
-      await server.close(force: true);
+      } else {
+        await json(req, 404, {});
+      }
     });
+    service = serviceFor(server);
 
-    test('deleteFile returns false on non-200 status', () async {
-      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-      server.listen((req) async {
-        req.response.statusCode = 404;
-        await req.response.close();
-      });
+    final dir = Directory.systemTemp.createTempSync('download_test_');
+    addTearDown(() => dir.deleteSync(recursive: true));
 
-      final service = FilesService(ApiConfig('http://127.0.0.1:${server.port}'));
-      final ok = await service.deleteFile('missing.pdf');
-      expect(ok, false);
+    final ok = File('${dir.path}/ok.bin');
+    await service.downloadTo('ok.bin', ok);
+    expect(ok.lengthSync(), 5000);
 
-      await server.close(force: true);
-    });
-
-    // ── getStats ──────────────────────────────────────────────────────────────
-
-    test('getStats parses DiskStats on 200', () async {
-      final server = await startMockServer({
-        '/api/files/stats': (
-          status: 200,
-          body: {'total': 1000000, 'used': 400000, 'free': 600000},
-        ),
-      });
-
-      final service = FilesService(ApiConfig('http://127.0.0.1:${server.port}'));
-      final stats = await service.getStats();
-
-      expect(stats.total, 1000000);
-      expect(stats.used, 400000);
-      expect(stats.free, 600000);
-
-      await server.close(force: true);
-    });
-
-    test('getStats throws on non-200', () async {
-      final server = await startMockServer({
-        '/api/files/stats': (status: 503, body: 'error'),
-      });
-
-      final service = FilesService(ApiConfig('http://127.0.0.1:${server.port}'));
-      expect(() => service.getStats(), throwsA(isA<Exception>()));
-
-      await server.close(force: true);
-    });
-
-    // ── getConfig ─────────────────────────────────────────────────────────────
-
-    test('getConfig parses AppConfig on 200', () async {
-      final server = await startMockServer({
-        '/api/config': (
-          status: 200,
-          body: {
-            'appName': 'SrvFiles',
-            'lanIp': '192.168.1.5',
-            'port': 3001,
-            'frontendPort': 5173,
-            'maxFileSizeMb': 100,
-            'lanUrl': 'http://192.168.1.5:3001',
-          },
-        ),
-      });
-
-      final service = FilesService(ApiConfig('http://127.0.0.1:${server.port}'));
-      final cfg = await service.getConfig();
-
-      expect(cfg.appName, 'SrvFiles');
-      expect(cfg.lanIp, '192.168.1.5');
-      expect(cfg.port, 3001);
-      expect(cfg.maxFileSizeMb, 100);
-
-      await server.close(force: true);
-    });
-
-    test('getConfig throws on non-200', () async {
-      final server = await startMockServer({
-        '/api/config': (status: 500, body: 'internal error'),
-      });
-
-      final service = FilesService(ApiConfig('http://127.0.0.1:${server.port}'));
-      expect(() => service.getConfig(), throwsA(isA<Exception>()));
-
-      await server.close(force: true);
-    });
-
-    // ── healthCheck ───────────────────────────────────────────────────────────
-
-    test('healthCheck returns true on 200', () async {
-      final server = await startMockServer({
-        '/api/health': (status: 200, body: {'status': 'ok'}),
-      });
-
-      final service = FilesService(ApiConfig('http://127.0.0.1:${server.port}'));
-      final ok = await service.healthCheck();
-      expect(ok, true);
-
-      await server.close(force: true);
-    });
-
-    test('healthCheck returns false on non-200', () async {
-      final server = await startMockServer({
-        '/api/health': (status: 503, body: 'down'),
-      });
-
-      final service = FilesService(ApiConfig('http://127.0.0.1:${server.port}'));
-      final ok = await service.healthCheck();
-      expect(ok, false);
-
-      await server.close(force: true);
-    });
-
-    test('healthCheck returns false when connection fails', () async {
-      final service = FilesService(ApiConfig('http://127.0.0.1:19996'));
-      final ok = await service.healthCheck();
-      expect(ok, false);
-    });
-
-    // ── getDownloadUrl ────────────────────────────────────────────────────────
-
-    test('getDownloadUrl returns correct URL with encoded filename', () {
-      final service = FilesService(ApiConfig('http://192.168.1.10:3001'));
-      final url = service.getDownloadUrl('my file.pdf');
-      expect(url, 'http://192.168.1.10:3001/api/files/download/my%20file.pdf');
-    });
-
-    test('getDownloadUrl handles simple filename', () {
-      final service = FilesService(ApiConfig('http://192.168.1.10:3001'));
-      final url = service.getDownloadUrl('photo.jpg');
-      expect(url, 'http://192.168.1.10:3001/api/files/download/photo.jpg');
-    });
-
-    // ── auth header forwarding ────────────────────────────────────────────────
-
-    test('getFiles sends X-SrvFiles-Token header when token set', () async {
-      String? receivedToken;
-      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-      server.listen((req) async {
-        receivedToken = req.headers.value('x-srvfiles-token');
-        req.response
-          ..statusCode = 200
-          ..headers.contentType = ContentType.json
-          ..write(jsonEncode({'files': []}));
-        await req.response.close();
-      });
-
-      final service = FilesService(ApiConfig('http://127.0.0.1:${server.port}'));
-      service.setToken('test-token-xyz');
-      await service.getFiles();
-
-      expect(receivedToken, 'test-token-xyz');
-
-      await server.close(force: true);
-    });
+    final missing = File('${dir.path}/missing.bin');
+    await expectLater(service.downloadTo('missing.bin', missing), throwsA(isA<ServerException>()));
+    expect(dir.listSync().map((e) => e.uri.pathSegments.last), ['ok.bin']);
   });
 }

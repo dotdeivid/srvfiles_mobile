@@ -16,8 +16,8 @@ App Android para el ecosistema [SrvFiles](https://github.com/dotdeivid/srvfiles)
 - Explorar, subir, descargar y eliminar archivos del servidor
 - **Previsualización de archivos** — botón "ver" en lista y grilla; imágenes, video, audio, PDF y texto se abren en pantalla completa sin descargar permanentemente (ver tabla abajo)
 - Transferencia P2P directa entre dispositivos (sin pasar por disco)
-- **Cifrado E2E en P2P** — ECDH P-256 + AES-256-GCM; cada sesión usa clave efímera
-- Archivos recibidos guardados en `Download/SrvFiles/received/`
+- **Cifrado del canal WebSocket** — ECDH P-256 + AES-256-GCM con clave efímera por conexión. Es cifrado salto a salto (dispositivo ↔ relay), no de extremo a extremo: el relay descifra y vuelve a cifrar cada chunk, y el intercambio de claves no está autenticado. El candado del encabezado indica si la conexión actual está cifrada
+- Archivos recibidos guardados en `Download/SrvFiles/received/` (si Android no permite escribir ahí, en el almacenamiento propio de la app; en iOS, en la app Archivos)
 - Descubrimiento automático de servidores en la red local al abrir la app
 - Autenticación PIN al conectarse a servidores protegidos
 - ConnectSheet: info del servidor activo (IP, PIN, estado) accesible desde el header

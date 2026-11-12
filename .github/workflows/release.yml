@@ -28,6 +28,7 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
+          flutter-version: '3.41.7'
           channel: 'stable'
           cache: true
 
@@ -44,8 +45,33 @@ jobs:
       - name: Get dependencies
         run: flutter pub get
 
+      - name: Analyze
+        run: flutter analyze
+
       - name: Run tests
         run: flutter test
+
+      # Firma de release: los secretos ANDROID_KEYSTORE_BASE64, ANDROID_KEY_ALIAS,
+      # ANDROID_KEY_PASSWORD y ANDROID_STORE_PASSWORD generan android/key.properties.
+      # Sin ellos el APK se firma con la clave de debug (ver build.gradle.kts).
+      - name: Configure release signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > android/app/release.jks
+            {
+              echo "storeFile=release.jks"
+              echo "keyAlias=$KEY_ALIAS"
+              echo "keyPassword=$KEY_PASSWORD"
+              echo "storePassword=$STORE_PASSWORD"
+            } > android/key.properties
+          else
+            echo "::warning::Sin secretos de firma: el APK se firma con la clave de debug"
+          fi
 
       - name: Build APK (release)
         run: |

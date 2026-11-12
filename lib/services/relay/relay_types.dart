@@ -37,7 +37,10 @@ class TransferSession {
   final int fileSize;
   final String mimeType;
 
-  const TransferSession({
+  /// true cuando el receptor aceptó; antes de eso no se reenvían chunks.
+  bool accepted = false;
+
+  TransferSession({
     required this.transferId,
     required this.senderClientId,
     required this.receiverClientId,

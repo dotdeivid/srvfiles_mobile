@@ -2,8 +2,8 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math';
 import 'package:flutter/foundation.dart';
-import 'package:http/http.dart' as http;
 import 'package:file_picker/file_picker.dart';
+import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import '../../config/api_config.dart';
 import '../../models/file_info.dart';
@@ -13,11 +13,21 @@ import '../../services/files_service.dart';
 import '../../services/preview_service.dart';
 import '../../services/download_dir_service.dart';
 import '../../services/app_logger.dart';
+import '../../utils/file_names.dart';
+
+/// Criterio de orden de la lista de archivos del servidor.
+enum FileSort { newest, oldest, name, size }
+
+/// Archivo elegido para subir, con su tamaño ya calculado (para no hacer E/S
+/// síncrona al dibujar la hoja de subida).
+class StagedFile {
+  final File file;
+  final String name;
+  final int size;
+  const StagedFile(this.file, this.name, this.size);
+}
 
 /// Manages file-related state: listing, upload, download, share, deletion.
-///
-/// Replaces the file-related `setState()` calls and methods that lived in
-/// `_HomeScreenState` (home_screen.dart L446–1055).
 class FilesController extends ChangeNotifier {
   FilesController({
     FilesService? filesService,
@@ -30,6 +40,10 @@ class FilesController extends ChangeNotifier {
   FilesService? _filesService;
   ApiConfig? _apiConfig;
   final DownloadDirService _downloadDirService;
+  bool _disposed = false;
+
+  /// Callback para cuando el servidor rechaza el token (pedir el PIN).
+  VoidCallback? onAuthRequired;
 
   // ─── Public state ────────────────────────────────────────────────
 
@@ -40,22 +54,56 @@ class FilesController extends ChangeNotifier {
   String? error;
   bool isGridView = false;
   bool connectionLost = false;
+  FileSort sort = FileSort.newest;
 
   // Upload state
-  List<File> stagedFiles = [];
+  List<StagedFile> stagedFiles = [];
   bool uploading = false;
   double uploadProgress = 0;
+  bool _uploadCancelled = false;
+
+  /// Descargas en curso: nombre → progreso (0–1, o -1 si no se conoce).
+  final Map<String, double> downloads = {};
+  final Set<String> _cancelledDownloads = {};
 
   // Search
   String searchQuery = '';
   Timer? _searchDebounce;
 
+  // Temporales creados para "Compartir"; se borran al liberar el controller.
+  final List<String> _shareTemps = [];
+
   // ─── Computed ────────────────────────────────────────────────────
 
   List<FileInfo> get filteredFiles {
-    if (searchQuery.isEmpty) return files;
     final query = searchQuery.toLowerCase();
-    return files.where((f) => f.name.toLowerCase().contains(query)).toList();
+    final list = query.isEmpty
+        ? List<FileInfo>.of(files)
+        : files.where((f) => f.name.toLowerCase().contains(query)).toList();
+    switch (sort) {
+      case FileSort.newest:
+        list.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      case FileSort.oldest:
+        list.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+      case FileSort.name:
+        list.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+      case FileSort.size:
+        list.sort((a, b) => b.size.compareTo(a.size));
+    }
+    return list;
+  }
+
+  /// Límite por archivo en bytes, o null si el servidor no impone uno.
+  int? get maxFileBytes {
+    final mb = config?.maxFileSizeMb ?? 0;
+    return mb > 0 ? mb * 1024 * 1024 : null;
+  }
+
+  /// Archivos elegidos que superan el límite del servidor.
+  List<StagedFile> get oversizedFiles {
+    final max = maxFileBytes;
+    if (max == null) return const [];
+    return stagedFiles.where((f) => f.size > max).toList();
   }
 
   // ─── Service access ─────────────────────────────────────────────
@@ -65,70 +113,83 @@ class FilesController extends ChangeNotifier {
 
   /// Re-initialise the backing service (e.g. when switching servers).
   void setService(FilesService service, ApiConfig config) {
+    if (!identical(service, _filesService)) _filesService?.close();
     _filesService = service;
     _apiConfig = config;
-    notifyListeners();
+    _notify();
   }
 
   // ─── Data loading ───────────────────────────────────────────────
 
   Future<void> initialLoad() async {
-    if (_filesService == null) return;
+    final service = _filesService;
+    if (service == null) return;
     loading = true;
     error = null;
-    notifyListeners();
+    _notify();
 
     try {
       AppLogger.instance.debug('[FilesController] initialLoad starting');
       final results = await Future.wait([
-        _filesService!.getFiles(),
-        _filesService!.getStats(),
-        _filesService!.getConfig(),
+        service.getFiles(),
+        service.getStats(),
+        service.getConfig(),
       ]);
+      if (!identical(service, _filesService)) return; // cambió de servidor
 
       files = results[0] as List<FileInfo>;
       stats = results[1] as DiskStats;
       config = results[2] as AppConfig;
       loading = false;
+      connectionLost = false;
       PreviewService.setMaxPreviewMb(config!.previewMaxFileSizeMb);
       AppLogger.instance.info(
         '[FilesController] initial load complete: ${files.length} files',
       );
-      notifyListeners();
+      _notify();
+    } on AuthRequiredException {
+      loading = false;
+      _notify();
+      onAuthRequired?.call();
     } catch (e) {
       AppLogger.instance.error('[FilesController] initialLoad failed', error: e);
-      error = 'Error al conectar con el servidor';
+      error = e is ServerException ? e.message : 'No se pudo conectar con el servidor';
       loading = false;
-      notifyListeners();
+      _notify();
     }
   }
 
   Future<void> refreshData() async {
-    if (_filesService == null) return;
+    final service = _filesService;
+    if (service == null) return;
     try {
       final results = await Future.wait([
-        _filesService!.getFiles(),
-        _filesService!.getStats(),
+        service.getFiles(),
+        service.getStats(),
       ]);
+      if (!identical(service, _filesService)) return;
 
       files = results[0] as List<FileInfo>;
       stats = results[1] as DiskStats;
       connectionLost = false;
-      notifyListeners();
+      error = null;
+      _notify();
+    } on AuthRequiredException {
+      onAuthRequired?.call();
     } catch (e) {
       AppLogger.instance.warn('[FilesController] refreshData failed: $e');
-      if (files.isNotEmpty) {
+      if (config != null) {
         connectionLost = true;
       } else {
-        error = 'Error al actualizar datos';
+        error = 'No se pudo actualizar la lista';
       }
-      notifyListeners();
+      _notify();
     }
   }
 
   // ─── Upload ─────────────────────────────────────────────────────
 
-  Future<List<File>> pickFiles() async {
+  Future<List<StagedFile>> pickFiles() async {
     final result = await FilePicker.platform.pickFiles(
       allowMultiple: true,
       type: FileType.any,
@@ -136,95 +197,149 @@ class FilesController extends ChangeNotifier {
 
     if (result == null || result.files.isEmpty) return [];
 
-    final picked = result.files
-        .where((f) => f.path != null)
-        .map((f) => File(f.path!))
-        .toList();
+    final picked = <StagedFile>[];
+    for (final f in result.files) {
+      if (f.path == null) continue;
+      final file = File(f.path!);
+      picked.add(StagedFile(file, f.name, f.size > 0 ? f.size : await file.length()));
+    }
 
     if (picked.isEmpty) return [];
 
     stagedFiles = [...stagedFiles, ...picked];
-    notifyListeners();
+    _notify();
     return picked;
   }
 
   void removeStagedFile(int index) {
     stagedFiles = List.from(stagedFiles)..removeAt(index);
-    notifyListeners();
+    _notify();
   }
 
   void clearStagedFiles() {
     stagedFiles = [];
-    notifyListeners();
+    _notify();
+    unawaited(_clearPickerCache());
   }
 
-  Future<void> uploadStagedFiles() async {
-    if (_filesService == null) return;
+  /// Sube los archivos elegidos. Devuelve los nombres que el servidor no pudo
+  /// guardar (lista vacía si todo salió bien). Lanza si la subida falla.
+  Future<List<String>> uploadStagedFiles() async {
+    final service = _filesService;
+    if (service == null || stagedFiles.isEmpty) return const [];
     uploading = true;
     uploadProgress = 0;
-    notifyListeners();
+    _uploadCancelled = false;
+    _notify();
 
+    var lastPercent = -1;
     try {
-      await _filesService!.uploadFiles(stagedFiles);
-      uploading = false;
-      uploadProgress = 0;
+      final failed = await service.uploadFiles(
+        stagedFiles.map((s) => s.file).toList(),
+        isCancelled: () => _uploadCancelled,
+        onProgress: (progress) {
+          uploadProgress = progress;
+          final percent = (progress * 100).floor();
+          if (percent != lastPercent) {
+            lastPercent = percent;
+            _notify();
+          }
+        },
+      );
       stagedFiles = [];
-      notifyListeners();
+      unawaited(_clearPickerCache());
       await refreshData();
-    } catch (e) {
+      return failed;
+    } on AuthRequiredException {
+      onAuthRequired?.call();
+      rethrow;
+    } finally {
       uploading = false;
       uploadProgress = 0;
-      notifyListeners();
-      rethrow;
+      _notify();
+    }
+  }
+
+  void cancelUpload() {
+    if (!uploading) return;
+    _uploadCancelled = true;
+  }
+
+  /// Borra las copias que file_picker deja en la caché de la app.
+  Future<void> _clearPickerCache() async {
+    try {
+      await FilePicker.platform.clearTemporaryFiles();
+    } catch (_) {
+      // No disponible en todas las plataformas.
     }
   }
 
   // ─── Download ───────────────────────────────────────────────────
 
+  bool isDownloading(String fileName) => downloads.containsKey(fileName);
+
   /// Downloads a file and returns the local path, or null on error.
+  /// Lanza [OperationCancelledException] si el usuario la canceló.
+  /// No sobrescribe: si ya existe un archivo con ese nombre usa ` (n)`.
   Future<String?> download(FileInfo file) async {
-    if (_filesService == null) return null;
+    final service = _filesService;
+    if (service == null || downloads.containsKey(file.name)) return null;
+    downloads[file.name] = -1;
+    _cancelledDownloads.remove(file.name);
+    _notify();
     try {
-      final url = _filesService!.getDownloadUrl(file.name);
-      final response = await http.get(
-        Uri.parse(url),
-        headers: _filesService!.authHeaders,
-      );
-
-      if (response.statusCode != 200) {
-        throw Exception('Status ${response.statusCode}');
-      }
-
       final dir = await _downloadDirService.getDownloadsDir();
-      final filePath = '${dir.path}/${file.name}';
-      await File(filePath).writeAsBytes(response.bodyBytes);
-      return filePath;
+      final target = await uniqueFileIn(dir, sanitizeFileName(file.name));
+      var lastPercent = -1;
+      await service.downloadTo(
+        file.name,
+        target,
+        isCancelled: () => _cancelledDownloads.contains(file.name),
+        onProgress: (progress) {
+          final percent = (progress * 100).floor();
+          if (percent != lastPercent) {
+            lastPercent = percent;
+            downloads[file.name] = progress;
+            _notify();
+          }
+        },
+      );
+      return target.path;
+    } on OperationCancelledException {
+      rethrow;
+    } on AuthRequiredException {
+      onAuthRequired?.call();
+      return null;
     } catch (e) {
       AppLogger.instance.error('[FilesController] download failed', error: e);
       return null;
+    } finally {
+      downloads.remove(file.name);
+      _notify();
     }
+  }
+
+  void cancelDownload(String fileName) {
+    if (downloads.containsKey(fileName)) _cancelledDownloads.add(fileName);
   }
 
   // ─── Share ──────────────────────────────────────────────────────
 
   /// Downloads a file to tmp and returns the temp path for sharing.
   Future<String?> prepareShare(FileInfo file) async {
-    if (_filesService == null) return null;
+    final service = _filesService;
+    if (service == null) return null;
     try {
-      final url = _filesService!.getDownloadUrl(file.name);
-      final response = await http.get(
-        Uri.parse(url),
-        headers: _filesService!.authHeaders,
-      );
-
-      if (response.statusCode != 200) {
-        throw Exception('Status ${response.statusCode}');
-      }
-
       final tempDir = await getTemporaryDirectory();
-      final tempPath = '${tempDir.path}/${file.name}';
-      await File(tempPath).writeAsBytes(response.bodyBytes);
-      return tempPath;
+      final shareDir = Directory(p.join(tempDir.path, 'srvfiles_share'));
+      if (!await shareDir.exists()) await shareDir.create(recursive: true);
+      final target = File(p.join(shareDir.path, sanitizeFileName(file.name)));
+      await service.downloadTo(file.name, target);
+      _shareTemps.add(target.path);
+      return target.path;
+    } on AuthRequiredException {
+      onAuthRequired?.call();
+      return null;
     } catch (e) {
       AppLogger.instance.error('[FilesController] prepareShare failed', error: e);
       return null;
@@ -234,45 +349,69 @@ class FilesController extends ChangeNotifier {
   // ─── Delete ─────────────────────────────────────────────────────
 
   Future<bool> deleteFile(String fileName) async {
-    if (_filesService == null) return false;
+    final service = _filesService;
+    if (service == null) return false;
     try {
-      await _filesService!.deleteFile(fileName);
-      await refreshData();
-      return true;
+      final ok = await service.deleteFile(fileName);
+      if (ok) await refreshData();
+      return ok;
+    } on AuthRequiredException {
+      onAuthRequired?.call();
+      return false;
     } catch (e) {
       AppLogger.instance.error('[FilesController] delete failed', error: e);
       return false;
     }
   }
 
-  // ─── Search ─────────────────────────────────────────────────────
+  // ─── Search / view ──────────────────────────────────────────────
 
   void setSearchQuery(String query) {
     _searchDebounce?.cancel();
     _searchDebounce = Timer(const Duration(milliseconds: 200), () {
       searchQuery = query;
-      notifyListeners();
+      _notify();
     });
-  }
-
-  @override
-  void dispose() {
-    _searchDebounce?.cancel();
-    super.dispose();
   }
 
   void toggleGridView() {
     isGridView = !isGridView;
-    notifyListeners();
+    _notify();
+  }
+
+  void setSort(FileSort value) {
+    sort = value;
+    _notify();
+  }
+
+  void _notify() {
+    if (!_disposed) notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    _searchDebounce?.cancel();
+    _uploadCancelled = true;
+    _cancelledDownloads.addAll(downloads.keys);
+    _filesService?.close();
+    for (final path in _shareTemps) {
+      File(path).delete().catchError((_) => File(path));
+    }
+    super.dispose();
   }
 
   // ─── UUID generation ────────────────────────────────────────────
 
-  /// Cryptographically secure transfer ID (replaces old DateTime-based impl).
+  /// Cryptographically secure transfer ID (UUID v4, 36 caracteres).
   static String generateTransferId() {
     final rng = Random.secure();
-    String hex(int count) =>
-        List.generate(count, (_) => rng.nextInt(256).toRadixString(16).padLeft(2, '0')).join();
-    return '${hex(4)}-${hex(2)}-4${hex(1).substring(1)}${hex(1)}-${(0x80 | rng.nextInt(0x40)).toRadixString(16)}${hex(1)}-${hex(6)}';
+    final bytes = List.generate(16, (_) => rng.nextInt(256));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    final hex = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+    return '${hex.substring(0, 8)}-${hex.substring(8, 12)}-'
+        '${hex.substring(12, 16)}-${hex.substring(16, 20)}-'
+        '${hex.substring(20, 32)}';
   }
 }

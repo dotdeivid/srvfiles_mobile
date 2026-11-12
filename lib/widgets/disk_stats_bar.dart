@@ -32,7 +32,7 @@ class DiskStatsBar extends StatelessWidget {
       fillGradient = AppColors.accentGradient;
     }
 
-    Widget bar = ClipRRect(
+    final Widget bar = ClipRRect(
       borderRadius: AppRadius.borderSm,
       child: SizedBox(
         width: fullWidth ? double.infinity : 120,

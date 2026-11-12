@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../theme/app_colors.dart';
@@ -63,7 +64,9 @@ class _ServerModeWarningDialogState extends State<ServerModeWarningDialog> {
           const SizedBox(height: 8),
           _bullet('Consume batería más rápido'),
           _bullet('El servidor se pausa si cerrás la app o apagás la pantalla'),
-          _bullet('Cualquier dispositivo en tu red podrá acceder a los archivos'),
+          if (Platform.isIOS)
+            _bullet('En iPhone el servidor deja de funcionar apenas la app pasa a segundo plano: mantenela abierta mientras otros se conectan'),
+          _bullet('Quienes tengan el PIN podrán ver, subir y borrar los archivos del servidor'),
           const SizedBox(height: 16),
 
           // Aviso de PIN

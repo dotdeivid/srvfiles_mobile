@@ -1,3 +1,5 @@
+import '../config/api_config.dart';
+
 class AppConfig {
   final String appName;
   final String lanIp;
@@ -18,7 +20,7 @@ class AppConfig {
   });
 
   factory AppConfig.fromJson(Map<String, dynamic> json) {
-    final port = (json['port'] as num).toInt();
+    final port = (json['port'] as num?)?.toInt() ?? defaultServerPort;
     return AppConfig(
       appName: (json['appName'] as String?) ?? 'SrvFiles',
       lanIp: (json['lanIp'] as String?) ?? '',

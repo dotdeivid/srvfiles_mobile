@@ -20,19 +20,49 @@ class IncomingTransferDialog extends StatelessWidget {
   final VoidCallback onReject;
 
   /// Muestra el diálogo y retorna true si se aceptó, false si se rechazó.
+  ///
+  /// Si [dismissed] se completa antes de que el usuario responda (el emisor
+  /// canceló o venció el plazo), el diálogo se cierra solo y retorna null.
   static Future<bool?> show(
     BuildContext context,
-    IncomingTransferRequest request,
-  ) {
+    IncomingTransferRequest request, {
+    Future<void>? dismissed,
+  }) {
+    var open = true;
+    BuildContext? dialogContext;
+    void close(BuildContext ctx, bool? value) {
+      if (!open) return;
+      open = false;
+      Navigator.of(ctx).pop(value);
+    }
+
+    var dismissedEarly = false;
+    dismissed?.then((_) {
+      final ctx = dialogContext;
+      if (ctx != null && ctx.mounted) {
+        close(ctx, null);
+      } else {
+        dismissedEarly = true;
+      }
+    });
+
     return showDialog<bool>(
       context: context,
       barrierDismissible: false,
-      builder: (ctx) => IncomingTransferDialog(
-        request: request,
-        onAccept: () => Navigator.of(ctx).pop(true),
-        onReject: () => Navigator.of(ctx).pop(false),
-      ),
-    );
+      builder: (ctx) {
+        dialogContext = ctx;
+        if (dismissedEarly) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (ctx.mounted) close(ctx, null);
+          });
+        }
+        return IncomingTransferDialog(
+          request: request,
+          onAccept: () => close(ctx, true),
+          onReject: () => close(ctx, false),
+        );
+      },
+    ).whenComplete(() => open = false);
   }
 
   @override
