@@ -53,4 +53,4 @@ El sigma del desenfoque gaussiano. Un valor de 20 es visible pero no excesivo. V
 
 ### `dart:ui`
 
-`ImageFilter` viene de `dart:ui`, la capa de bajo nivel de Flutter que expone APIs del motor de renderizado. No es del framework de widgets (`package:flutter/material.dart`) sino del motor en sí.
+`ImageFilter` viene de `dart:ui`, la capa de bajo nivel de Flutter que expone APIs del motor de renderizado. No es del framework de widgets (`package:material_ui/material_ui.dart`, que reemplaza a `package:flutter/material.dart` desde Flutter 3.47) sino del motor en sí.

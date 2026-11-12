@@ -1,1 +1,0 @@
-import{j as e}from"./react-vendor-D8DLBrxy.js";function r({src:i,fileName:s}){return e.jsxs("div",{className:"preview-audio-wrap",children:[e.jsx("span",{className:"preview-audio-icon",children:"🎵"}),e.jsx("p",{className:"preview-audio-name",children:s}),e.jsx("audio",{src:i,controls:!0,className:"preview-audio"})]})}export{r as AudioPreview};

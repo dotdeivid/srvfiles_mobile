@@ -45,7 +45,7 @@ All parameters are optional; the controller can be created before a server conne
 | `void clearStagedFiles()` | Empties the staging list. |
 | `Future<void> uploadStagedFiles()` | Uploads `stagedFiles` then calls `refreshData`. Clears staged files on success. |
 | `Future<String?> download(FileInfo)` | Downloads a file and saves it to `DownloadDirService.getDownloadsDir`. Returns the local path, or `null` on error. |
-| `Future<String?> prepareShare(FileInfo)` | Downloads a file to a temp directory for sharing via `share_plus`. Returns the temp path. |
+| `Future<String?> prepareShare(FileInfo)` | Downloads a file to a temp directory for sharing via `share_plus` (`SharePlus.instance.share`). Returns the temp path. |
 | `Future<bool> deleteFile(String fileName)` | Deletes a file on the server and calls `refreshData`. Returns `false` on error. |
 | `void setSearchQuery(String)` | Debounces 200 ms before updating `searchQuery` and notifying listeners. Cancels any pending debounce timer on each call, so only the final value after a pause triggers a rebuild. |
 | `void toggleGridView()` | Flips `isGridView`. |
@@ -60,3 +60,4 @@ All parameters are optional; the controller can be created before a server conne
 - `generateTransferId` is `static` so `TransferController` can call it without a `FilesController` instance.
 - `setSearchQuery` debounces via `dart:async` `Timer` — the `_searchDebounce` timer is cancelled on every call, so `notifyListeners()` fires only after 200 ms of inactivity. This prevents a full widget rebuild on every keystroke.
 - Dependencies: `dart:async`, `FilesService`, `ApiConfig`, `DownloadDirService`, `PreviewService`, `AppLogger`, `file_picker`, `http`, `path_provider`.
+- `file_picker` 13: API estática (`FilePicker.pickFiles()` devuelve `List<PlatformFile>`, vacía si se cancela; el tamaño se lee con `lengthSync()`). En Android copia el archivo elegido a la caché de la app y devuelve su ruta; `clearTemporaryFiles()` la limpia después de subir.

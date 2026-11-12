@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import '../features/files/files_controller.dart' show StagedFile;
 import '../theme/app_colors.dart';
 import '../utils/format.dart';

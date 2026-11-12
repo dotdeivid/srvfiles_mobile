@@ -178,11 +178,8 @@ class TransferController extends ChangeNotifier {
   }) async {
     if (activeTransfer != null) return;
 
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.any,
-      allowMultiple: true,
-    );
-    if (result == null || result.files.isEmpty) return;
+    final result = await FilePicker.pickFiles(type: FileType.any);
+    if (result.isEmpty) return;
 
     final via = service ?? transferService;
     if (via == transferService) {
@@ -192,10 +189,11 @@ class TransferController extends ChangeNotifier {
         return;
       }
     }
-    for (final f in result.files) {
-      if (f.path == null) continue;
+    for (final f in result) {
+      final path = f.path;
+      if (path == null) continue;
       _sendQueue.add(_QueuedFile(
-        file: File(f.path!),
+        file: File(path),
         fileName: f.name,
         peerId: targetClientId,
         peerName: peerName,

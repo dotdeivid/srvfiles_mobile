@@ -44,7 +44,7 @@ class NotificationService {
 
     try {
       await _plugin.initialize(
-        settings,
+        settings: settings,
         onDidReceiveNotificationResponse: (response) {
           final payload = response.payload;
           if (payload != null && payload.isNotEmpty) onTap?.call(payload);
@@ -136,9 +136,9 @@ class NotificationService {
           .resolvePlatformSpecificImplementation<
               AndroidFlutterLocalNotificationsPlugin>()
           ?.startForegroundService(
-            _idForeground,
-            'SrvFiles',
-            'Conexión activa en segundo plano',
+            id: _idForeground,
+            title: 'SrvFiles',
+            body: 'Conexión activa en segundo plano',
             notificationDetails: androidDetails,
             foregroundServiceTypes: {
               AndroidServiceForegroundType.foregroundServiceTypeDataSync,
@@ -160,7 +160,7 @@ class NotificationService {
           .resolvePlatformSpecificImplementation<
               AndroidFlutterLocalNotificationsPlugin>()
           ?.stopForegroundService();
-      await _plugin.cancel(_idForeground);
+      await _plugin.cancel(id: _idForeground);
     } catch (e) {
       AppLogger.instance.warn('[NotificationService] stopForeground failed: $e');
     }
@@ -190,7 +190,13 @@ class NotificationService {
     );
 
     try {
-      await _plugin.show(_nextId++, title, body, details, payload: payload);
+      await _plugin.show(
+        id: _nextId++,
+        title: title,
+        body: body,
+        notificationDetails: details,
+        payload: payload,
+      );
       AppLogger.instance.debug('[NotificationService] notification shown: $title');
     } catch (e) {
       AppLogger.instance.error('[NotificationService] show failed', error: e);

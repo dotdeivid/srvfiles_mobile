@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:srvfiles_mobile/config/api_config.dart';
+import 'package:srvfiles_mobile/utils/file_icons.dart';
 import 'package:srvfiles_mobile/utils/file_names.dart';
 import 'package:srvfiles_mobile/utils/format.dart';
 import 'package:srvfiles_mobile/utils/local_network.dart';
@@ -81,5 +82,13 @@ void main() {
         'http://192.168.1.10:3001/api/files/download/foto%20(1).jpg');
     expect(config.wsUrl, 'ws://192.168.1.10:3001/ws');
     expect(ApiConfig('https://example.com').wsUrl, 'wss://example.com/ws');
+  });
+
+  // Antes .md y cualquier extensión desconocida mostraban una carpeta.
+  test('getFileIcon: markdown is text and unknown files are not folders', () {
+    expect(getFileIcon('README.md'), getFileIcon('notas.txt'));
+    expect(getFileIcon('Guía.MARKDOWN'), getFileIcon('notas.txt'));
+    expect(getFileIcon('datos.xyz'), isNot('📁'));
+    expect(getFileIcon('sin-extension'), isNot('📁'));
   });
 }

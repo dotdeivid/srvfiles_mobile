@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:video_player/video_player.dart';
@@ -456,7 +456,7 @@ class _UnknownPreview extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Text('📁', style: TextStyle(fontSize: 72)),
+            const Text('📃', style: TextStyle(fontSize: 72)),
             const SizedBox(height: AppSpacing.md),
             const Text(
               'Este tipo de archivo no se puede previsualizar.',

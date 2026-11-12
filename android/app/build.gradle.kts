@@ -3,7 +3,6 @@ import java.io.FileInputStream
 
 plugins {
     id("com.android.application")
-    id("kotlin-android")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
 }
@@ -18,17 +17,15 @@ val keystoreProperties = Properties().apply {
 
 android {
     namespace = "com.srvfiles.srvfiles_mobile"
-    compileSdk = flutter.compileSdkVersion
+    // flutter_local_notifications 23 y androidx.core 1.19 exigen compilar contra
+    // API 37. Solo afecta la compilación: targetSdk y minSdk siguen los de Flutter.
+    compileSdk = maxOf(flutter.compileSdkVersion, 37)
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
         isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
-    }
-
-    kotlinOptions {
-        jvmTarget = JavaVersion.VERSION_17.toString()
     }
 
     defaultConfig {
@@ -64,6 +61,12 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
         }
+    }
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
     }
 }
 
