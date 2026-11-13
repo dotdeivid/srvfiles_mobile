@@ -1,1 +1,0 @@
-import{t as e}from"./react-vendor-CpIstwK3.js";var t=e();function n({src:e}){return(0,t.jsx)(`iframe`,{src:e,className:`preview-pdf`,title:`Vista previa PDF`})}export{n as PdfPreview};

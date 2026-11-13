@@ -1,1 +1,0 @@
-import{i as e,n as t,r as n,t as r}from"./vidstack-DEDQqd7c.js";import{t as i}from"./react-vendor-CpIstwK3.js";var a=i();function o({src:i}){return(0,a.jsx)(`div`,{className:`preview-media-wrap`,children:(0,a.jsxs)(n,{src:i,className:`preview-video-player`,children:[(0,a.jsx)(e,{}),(0,a.jsx)(r,{icons:t})]})})}export{o as VideoPreview};
