@@ -46,8 +46,8 @@ Delegates work to three sub-handlers:
 | `EmbeddedRelay({MdnsService? mdns, RelayCertStore? certs})` | `certs` lets tests keep the certificate in a temp folder. |
 | `Future<void> start({int port = 3001})` | Binds the HTTP server. Tries up to 5 successive ports if the requested port is busy. Port `0` lets the OS pick a free port. Then binds HTTPS on `port + 1` (also up to 5 tries; `0` when `port` is `0`) and advertises the relay by mDNS (`_srvfiles._tcp`). |
 | `Future<String> startServerMode()` | Activates server mode: creates `MobileServerStorageService` and `PinService`, generates and stores the PIN, wires the pin into `RelayAuth`, and returns the plain-text PIN. |
-| `Future<void> stopServerMode()` | Deactivates server mode, clears sessions/rate limits/PIN, and disposes storage and pin service. |
-| `Future<void> stop()` | Stops the mDNS advertisement, calls `stopServerMode`, closes all WebSocket connections, and closes both servers. |
+| `Future<void> stopServerMode()` | Deactivates server mode, clears sessions/rate limits/PIN, and disposes storage and pin service. If it was active, closes every WebSocket with `serverStoppedCloseCode` (4410) so browsers show "El servidor se detuvo" instead of reconnecting. |
+| `Future<void> stop()` | Stops the mDNS advertisement, calls `stopServerMode`, closes all WebSocket connections (code 4410), and closes both servers. |
 | `void notifyFilesChanged()` | Broadcasts `files-changed` (server mode only) when the shared folder changes outside the API, e.g. a P2P file was saved. |
 
 ## Key behaviors — request router (`_handleRequest`)
