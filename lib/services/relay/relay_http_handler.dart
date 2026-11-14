@@ -176,12 +176,14 @@ class RelayHttpHandler {
     _json(req, HttpStatus.ok, {'total': stats.total, 'used': stats.used, 'free': stats.free});
   }
 
-  void handleConfig(HttpRequest req, {required String? localIp, required int port}) {
+  void handleConfig(HttpRequest req, {required String? localIp, required int port, int? httpsPort}) {
     _json(req, HttpStatus.ok, {
       'appName': 'SrvFiles Mobile',
       'lanIp': localIp ?? '',
       'port': port,
       'frontendPort': port,
+      // 0 = sin HTTPS (el frontend web no muestra la dirección segura).
+      'httpsPort': httpsPort ?? 0,
       // 0 = sin límite por archivo (el límite real es el espacio libre).
       'maxFileSizeMb': 0,
       'lanUrl': localIp != null ? 'http://$localIp:$port' : '',

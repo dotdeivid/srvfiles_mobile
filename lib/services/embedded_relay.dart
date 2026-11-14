@@ -10,11 +10,18 @@ import 'app_logger.dart';
 import 'mdns_service.dart';
 import 'relay/relay_types.dart';
 import 'relay/relay_auth.dart';
+import 'relay/relay_cert.dart';
 import 'relay/relay_http_handler.dart';
 import 'relay/relay_origin.dart';
 import 'relay/relay_ws_handler.dart';
 
 /// Mini HTTP + WebSocket relay server embedded in the mobile app.
+///
+/// Escucha en dos puertos: HTTP en [port] (descubrimiento, la propia app y
+/// las apps nativas) y HTTPS en [httpsPort] (navegadores de otros equipos:
+/// sin contexto seguro no tienen WebCrypto ni pueden transferir archivos).
+/// Las páginas pedidas por HTTP desde otro equipo se redirigen a HTTPS, como
+/// en el backend Go.
 ///
 /// Modes:
 /// - **Relay only** (default): GET /api/health + WebSocket /ws only.
@@ -33,6 +40,8 @@ class EmbeddedRelay {
   static final EmbeddedRelay shared = EmbeddedRelay();
 
   HttpServer? _server;
+  HttpServer? _secureServer;
+  List<String> _certIps = const [];
   Future<void>? _starting;
   Future<void>? _stopping;
   final Map<String, ConnectedClient> _clients = {};
@@ -49,12 +58,16 @@ class EmbeddedRelay {
   /// Anuncio mDNS del relay: así lo encuentran los demás sin barrer la red.
   final MdnsService _mdns;
 
+  final RelayCertStore _certs;
+
   // Sub-handlers
   final RelayAuth _auth = RelayAuth();
   final RelayHttpHandler _httpHandler = RelayHttpHandler();
   late final RelayWsHandler _wsHandler;
 
-  EmbeddedRelay({MdnsService? mdns}) : _mdns = mdns ?? MdnsService() {
+  EmbeddedRelay({MdnsService? mdns, RelayCertStore? certs})
+      : _mdns = mdns ?? MdnsService(),
+        _certs = certs ?? RelayCertStore() {
     _wsHandler = RelayWsHandler(
       clients: _clients,
       transfers: _transfers,
@@ -74,6 +87,13 @@ class EmbeddedRelay {
   int get port => _port;
   String? get currentPin => _auth.currentPin;
   String? get url => _localIp != null ? 'http://$_localIp:$_port' : null;
+
+  /// Puerto HTTPS, o null si no se pudo levantar (queda solo HTTP).
+  int? get httpsPort => _secureServer?.port;
+
+  /// Dirección para abrir desde el navegador de otro equipo.
+  String? get httpsUrl =>
+      _localIp != null && httpsPort != null ? 'https://$_localIp:$httpsPort' : null;
 
   /// URL de loopback para que la propia app hable con el relay.
   String get loopbackUrl => 'http://127.0.0.1:$_port';
@@ -97,6 +117,14 @@ class EmbeddedRelay {
     if (_stopping != null) await _stopping;
     if (_server != null) {
       _localIp = await getLocalIpv4() ?? _localIp;
+      // Cambió la red: el certificado tiene que cubrir la IP nueva.
+      final ip = _localIp;
+      if (_secureServer != null && ip != null && !_certIps.contains(ip)) {
+        final httpsPort = _secureServer!.port;
+        await _secureServer!.close(force: true);
+        _secureServer = null;
+        await _startHttps(httpsPort);
+      }
       return;
     }
     if (_starting != null) return _starting;
@@ -134,7 +162,31 @@ class EmbeddedRelay {
     }
 
     _server!.listen((req) => unawaited(_handleRequest(req)));
+    await _startHttps(port == 0 ? 0 : _port + 1);
     unawaited(_advertise());
+  }
+
+  /// Levanta el servidor HTTPS. Si falla (puerto ocupado, certificado) el
+  /// relay sigue funcionando por HTTP: la app y el descubrimiento no lo usan.
+  Future<void> _startHttps(int port) async {
+    try {
+      final ips = [?_localIp];
+      final context = await _certs.securityContext(ips);
+      for (var attempt = 0; attempt < 5; attempt++) {
+        try {
+          _secureServer = await HttpServer.bindSecure(InternetAddress.anyIPv4, port, context);
+          break;
+        } on SocketException {
+          if (port == 0) rethrow;
+          port++;
+        }
+      }
+      if (_secureServer == null) throw Exception('ningún puerto libre');
+      _certIps = ips;
+      _secureServer!.listen((req) => unawaited(_handleRequest(req, secure: true)));
+    } catch (e, st) {
+      AppLogger.instance.error('embedded_relay: no se pudo iniciar HTTPS, solo HTTP', error: e, stack: st);
+    }
   }
 
   /// Activates full server mode. Returns the generated PIN.
@@ -174,8 +226,11 @@ class EmbeddedRelay {
     await stopServerMode();
     await _disconnectAll();
     final server = _server;
+    final secureServer = _secureServer;
     _server = null;
+    _secureServer = null;
     await server?.close(force: true);
+    await secureServer?.close(force: true);
   }
 
   /// Crea una sesión para la propia app (dueña del relay) sin pasar por HTTP.
@@ -192,8 +247,9 @@ class EmbeddedRelay {
 
   // ─── Request router ───────────────────────────────────────────────
 
-  Future<void> _handleRequest(HttpRequest req) async {
+  Future<void> _handleRequest(HttpRequest req, {bool secure = false}) async {
     try {
+      if (!secure && _redirectToHttps(req)) return;
       await _route(req);
     } catch (e, st) {
       AppLogger.instance.error('embedded_relay: error atendiendo ${req.method} ${req.uri.path}', error: e, stack: st);
@@ -207,6 +263,27 @@ class EmbeddedRelay {
         // La respuesta ya se había empezado a enviar.
       }
     }
+  }
+
+  /// Manda a HTTPS las páginas que un navegador de otro equipo abre por HTTP
+  /// (ver [shouldRedirectToHttps]). Redirección temporal (302): no queda
+  /// cacheada si después HTTPS no levanta.
+  bool _redirectToHttps(HttpRequest req) {
+    final httpsPort = this.httpsPort;
+    if (httpsPort == null ||
+        !shouldRedirectToHttps(
+          method: req.method,
+          path: req.uri.path,
+          loopback: req.connectionInfo?.remoteAddress.isLoopback ?? true,
+        )) {
+      return false;
+    }
+    final target = req.requestedUri.replace(scheme: 'https', port: httpsPort);
+    req.response
+      ..statusCode = HttpStatus.found
+      ..headers.set(HttpHeaders.locationHeader, target.toString());
+    unawaited(req.response.close());
+    return true;
   }
 
   Future<void> _route(HttpRequest req) async {
@@ -286,7 +363,7 @@ class EmbeddedRelay {
         return _httpHandler.handleDeleteFile(req, name);
       }
       if (path == '/api/config' && method == 'GET') {
-        return _httpHandler.handleConfig(req, localIp: _localIp, port: _port);
+        return _httpHandler.handleConfig(req, localIp: _localIp, port: _port, httpsPort: httpsPort);
       }
       // Unknown /api/ route
       return _json(req, HttpStatus.notFound, {'error': 'Not found'});

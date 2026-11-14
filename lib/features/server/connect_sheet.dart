@@ -16,6 +16,7 @@ class ConnectSheet extends StatefulWidget {
     this.webUrl,
     this.relayIp,
     this.relayPort = defaultServerPort,
+    this.relayHttpsPort,
     this.relayPin,
     this.isRelayServer = false,
     this.isRelayRunning = false,
@@ -28,6 +29,8 @@ class ConnectSheet extends StatefulWidget {
   final String? webUrl;
   final String? relayIp;
   final int relayPort;
+  /// Puerto HTTPS del relay (null si solo hay HTTP).
+  final int? relayHttpsPort;
   final String? relayPin;
   final bool isRelayServer;
   final bool isRelayRunning;
@@ -315,19 +318,24 @@ class _ConnectSheetState extends State<ConnectSheet> {
           if (isLocalServer)
             _buildServerInfoCard(
               address: '${widget.relayIp ?? '...'}:${widget.relayPort}',
+              // Con "https://" a la vista: escrita sin él, el navegador no
+              // tiene contexto seguro y no puede enviar ni recibir archivos.
+              webAddress: widget.relayIp != null && widget.relayHttpsPort != null
+                  ? 'https://${widget.relayIp}:${widget.relayHttpsPort}'
+                  : null,
               badgeText: 'Activo',
               icon: Icons.wifi_tethering_rounded,
               pin: widget.relayPin,
-              description: 'Otros dispositivos pueden conectarse desde el navegador a esta dirección.',
+              description: widget.relayHttpsPort != null
+                  ? 'Desde el navegador de otro equipo abrí la dirección Web. La primera vez avisa que el certificado no es de confianza: es autofirmado, elegí continuar.'
+                  : 'Otros dispositivos pueden conectarse desde el navegador a esta dirección.',
             )
           else if (widget.currentServerUrl != null) ...[
             _buildServerInfoCard(
               address: widget.currentServerUrl!
                   .replaceAll('http://', '')
                   .replaceAll('https://', ''),
-              webAddress: widget.webUrl
-                  ?.replaceAll('http://', '')
-                  .replaceAll('https://', ''),
+              webAddress: widget.webUrl?.replaceAll('http://', ''),
               badgeText: 'Conectado',
               icon: Icons.wifi_rounded,
               description: 'Servidor al que estás conectado actualmente.',
