@@ -13,6 +13,7 @@ class AppConfig {
   final String lanIp;
   final int port;
   final int maxFileSizeMb;
+  final int httpsPort; // 0 = sin HTTPS
   // ...
 }
 ```
@@ -61,3 +62,9 @@ Los casteos explícitos convierten el tipo `dynamic` al tipo concreto. Si el JSO
 - Mostrar el nombre del servidor en la AppBar (`_config?.appName`).
 - Generar el QR con la URL LAN (`config.lanIp`, `config.port`).
 - Validar el tamaño máximo de archivos en el `UploadSheet` (`maxFileSizeMb`).
+
+---
+
+## `httpsPort` y `browserUrl`
+
+`httpsPort` viene de `/api/config` (0 si falta). `browserUrl` es la dirección para abrir desde un navegador: `https://<lanIp>:<httpsPort>` si el servidor tiene HTTPS, si no `http://<lanIp>:<frontendPort>`. La usan el QR del pie y la tarjeta del servidor conectado.

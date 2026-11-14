@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:srvfiles_mobile/services/e2e_service.dart';
 import 'package:srvfiles_mobile/services/embedded_relay.dart';
+import 'package:srvfiles_mobile/services/relay/relay_cert.dart';
 import 'package:srvfiles_mobile/services/relay/relay_origin.dart';
 import 'package:srvfiles_mobile/services/mobile_server_storage_service.dart';
 
@@ -17,12 +18,14 @@ void main() {
   late EmbeddedRelay relay;
   late HttpClient http;
   late Directory tmp;
+  late Directory certDir;
 
   setUp(() async {
     HttpOverrides.global = null;
     SharedPreferences.setMockInitialValues({});
     tmp = await Directory.systemTemp.createTemp('relay_test_');
-    relay = EmbeddedRelay();
+    certDir = await Directory.systemTemp.createTemp('relay_cert_');
+    relay = EmbeddedRelay(certs: RelayCertStore(directory: () async => certDir));
     await relay.start(port: 0);
     http = HttpClient();
   });
@@ -31,6 +34,7 @@ void main() {
     http.close(force: true);
     await relay.stop();
     await tmp.delete(recursive: true);
+    await certDir.delete(recursive: true);
   });
 
   String base() => 'http://127.0.0.1:${relay.port}';
@@ -86,6 +90,66 @@ void main() {
   });
 
   // Una web cualquiera abierta en el navegador no puede usar el relay.
+  group('HTTPS', () {
+    test('atiende la misma API por TLS con el certificado autofirmado', () async {
+      expect(relay.httpsPort, isNotNull);
+      X509Certificate? seen;
+      final client = HttpClient()
+        ..badCertificateCallback = (cert, host, port) {
+          seen = cert;
+          return true;
+        };
+      addTearDown(() => client.close(force: true));
+      final req = await client.getUrl(Uri.parse('https://127.0.0.1:${relay.httpsPort}/api/health'));
+      final res = await req.close();
+      final body = jsonDecode(await res.transform(utf8.decoder).join()) as Map<String, dynamic>;
+      expect(res.statusCode, 200);
+      expect(body['app'], 'srvfiles');
+      expect(seen!.subject, contains('SrvFiles'));
+      expect(seen!.endValidity.isAfter(DateTime.now().add(const Duration(days: 700))), isTrue);
+    });
+
+    test('el navegador del mismo equipo no se redirige', () async {
+      final res = await send('GET', '/');
+      expect(res.status, isNot(HttpStatus.found));
+    });
+
+    test('/api/config publica el puerto HTTPS', () async {
+      await relay.startServerMode(storage: MobileServerStorageService.forTesting(tmp));
+      final token = await login();
+      final res = await send('GET', '/api/config', token: token);
+      expect((jsonDecode(res.body) as Map<String, dynamic>)['httpsPort'], relay.httpsPort);
+    });
+
+    test('regla de redirección: solo páginas pedidas desde otro equipo', () {
+      expect(shouldRedirectToHttps(method: 'GET', path: '/', loopback: false), isTrue);
+      expect(shouldRedirectToHttps(method: 'HEAD', path: '/assets/a.js', loopback: false), isTrue);
+      expect(shouldRedirectToHttps(method: 'GET', path: '/', loopback: true), isFalse);
+      expect(shouldRedirectToHttps(method: 'GET', path: '/api/health', loopback: false), isFalse);
+      expect(shouldRedirectToHttps(method: 'GET', path: '/ws', loopback: false), isFalse);
+      expect(shouldRedirectToHttps(method: 'POST', path: '/', loopback: false), isFalse);
+    });
+  });
+
+  group('certificado', () {
+    test('se reutiliza mientras cubra la IP y se regenera si cambia', () async {
+      final store = RelayCertStore(directory: () async => certDir);
+      final first = await store.getOrCreate(['192.168.1.20']);
+      final again = await store.getOrCreate(['192.168.1.20']);
+      expect(again.certPem, first.certPem);
+      final moved = await store.getOrCreate(['10.0.0.7']);
+      expect(moved.certPem, isNot(first.certPem));
+      expect(moved.ips, ['10.0.0.7']);
+    });
+
+    test('se regenera cuando faltan menos de 30 días para que venza', () async {
+      final store = RelayCertStore(directory: () async => certDir);
+      final first = await store.getOrCreate(['192.168.1.20']);
+      final later = await store.getOrCreate(['192.168.1.20'], now: DateTime.now().add(const Duration(days: 710)));
+      expect(later.certPem, isNot(first.certPem));
+    });
+  });
+
   group('origin', () {
     test('rule matches the Go backend (webguard)', () {
       const host = '192.168.1.5:8080';

@@ -579,11 +579,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       backgroundColor: Colors.transparent,
       builder: (ctx) => ConnectSheet(
         currentServerUrl: widget.serverUrl,
-        webUrl: (cfg != null && _hasServer && cfg.frontendPort != cfg.port && cfg.lanIp.isNotEmpty)
-            ? 'http://${cfg.lanIp}:${cfg.frontendPort}'
+        webUrl: (cfg != null && _hasServer && cfg.lanIp.isNotEmpty &&
+                (cfg.httpsPort > 0 || cfg.frontendPort != cfg.port))
+            ? cfg.browserUrl
             : null,
         relayIp: _serverCtrl.relay.localIp,
         relayPort: _serverCtrl.relay.port,
+        relayHttpsPort: _serverCtrl.relay.httpsPort,
         relayPin: _serverCtrl.relay.isServerMode ? _serverCtrl.relay.currentPin : null,
         isRelayServer: _serverCtrl.relay.isServerMode,
         isRelayRunning: _serverCtrl.relay.isRunning,

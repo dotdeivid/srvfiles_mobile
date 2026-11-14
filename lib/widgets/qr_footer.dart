@@ -8,8 +8,8 @@ import '../models/app_config.dart';
 /// Replica QRFooter.tsx del frontend web.
 ///
 /// El QR va en módulos oscuros sobre fondo blanco: los QR invertidos (claro
-/// sobre oscuro) no los leen muchas cámaras. La URL usa el puerto del
-/// frontend web, que es el que abre el navegador.
+/// sobre oscuro) no los leen muchas cámaras. La URL es la HTTPS cuando el
+/// servidor la tiene (ver [AppConfig.browserUrl]).
 class QrFooter extends StatelessWidget {
   const QrFooter({super.key, required this.config});
 
@@ -20,7 +20,7 @@ class QrFooter extends StatelessWidget {
     final cfg = config;
     if (cfg == null || cfg.lanIp.isEmpty) return const SizedBox.shrink();
 
-    final lanUrl = 'http://${cfg.lanIp}:${cfg.frontendPort}';
+    final lanUrl = cfg.browserUrl;
     final theme = Theme.of(context);
 
     return Container(

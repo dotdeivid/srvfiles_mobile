@@ -17,6 +17,7 @@ A modal bottom sheet that lets the user view the current server info, scan for o
 | `onConnect` | `void Function(String url)` | Called with the selected URL when the user taps a discovered server or submits the manual IP. |
 | `onDisconnect` | `VoidCallback` | Called when the user taps "Desconectarse". Navigates back to the splash screen. |
 | `currentServerUrl` | `String?` | URL of the currently connected external server, or `null`. |
+| `relayHttpsPort` | `int?` | HTTPS port of the local relay; when set, the local server card shows a "Web" row with `https://<ip>:<port>` and explains the certificate warning. |
 | `webUrl` | `String?` | Web URL of the connected server (shown as a second URL row if different from the server URL). |
 | `relayIp` | `String?` | Local IP address of this device's embedded relay (shown when acting as local server). |
 | `relayPort` | `int` | Port of the embedded relay (default `3001`). |

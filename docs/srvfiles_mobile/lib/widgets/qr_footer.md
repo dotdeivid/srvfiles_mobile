@@ -20,7 +20,7 @@ Si `config == null` (todavía cargando), retorna `SizedBox.shrink()`.
 ## URL del QR
 
 ```dart
-final lanUrl = 'http://${config!.lanIp}:${config!.port}';
+final lanUrl = cfg.browserUrl; // https://<lanIp>:<httpsPort>, o http://<lanIp>:<frontendPort> sin HTTPS
 ```
 
 Construye la URL LAN del servidor a partir de la configuración. Esta URL es la que escanea el `QrImageView` y la que aparece como texto debajo del QR.
