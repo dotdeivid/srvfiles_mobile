@@ -261,6 +261,28 @@ void main() {
       expect((await send('GET', '/api/files', token: token)).status, 401);
     });
 
+    test('turning server mode off closes sockets with 4410 (server stopped)', () async {
+      final token = await login();
+      // El relay lo cierra.
+      // ignore: close_sinks
+      final ws = await WebSocket.connect('ws://127.0.0.1:${relay.port}/ws');
+      final authed = Completer<void>();
+      final done = Completer<void>();
+      ws.listen((data) {
+        if (data is String && (jsonDecode(data) as Map)['type'] == 'auth_ok' && !authed.isCompleted) {
+          authed.complete();
+        }
+      }, onDone: done.complete);
+      ws.add(jsonEncode({'type': 'auth', 'token': token}));
+      await authed.future.timeout(const Duration(seconds: 3));
+      // El relay registra al cliente con el hello (como hace la web tras auth_ok).
+      ws.add(jsonEncode({'type': 'hello', 'appName': 'Navegador', 'e2e': 1}));
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      await relay.stopServerMode();
+      await done.future.timeout(const Duration(seconds: 3));
+      expect(ws.closeCode, serverStoppedCloseCode);
+    });
+
     test('WebSocket without a valid token is closed with 4401', () async {
       // El relay lo cierra.
       // ignore: close_sinks

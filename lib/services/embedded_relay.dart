@@ -15,6 +15,11 @@ import 'relay/relay_http_handler.dart';
 import 'relay/relay_origin.dart';
 import 'relay/relay_ws_handler.dart';
 
+/// Código de cierre del WebSocket cuando el servidor se apaga a propósito:
+/// la web deja de reconectar y muestra "El servidor se detuvo" (mismo
+/// código que el backend Go, `transfer.ServerStoppedCode`).
+const serverStoppedCloseCode = 4410;
+
 /// Mini HTTP + WebSocket relay server embedded in the mobile app.
 ///
 /// Escucha en dos puertos: HTTP en [port] (descubrimiento, la propia app y
@@ -203,7 +208,8 @@ class EmbeddedRelay {
   /// Deactivates server mode, clears sessions and PIN.
   ///
   /// Cierra también los sockets abiertos, para que nadie siga autenticado
-  /// con un token del modo servidor anterior.
+  /// con un token del modo servidor anterior, avisando que el servidor se
+  /// detuvo ([serverStoppedCloseCode]).
   Future<void> stopServerMode() async {
     final wasActive = _serverModeActive;
     _serverModeActive = false;
@@ -212,7 +218,7 @@ class EmbeddedRelay {
     _pinService = null;
     _auth.pinService = null;
     _httpHandler.storage = null;
-    if (wasActive) await _disconnectAll();
+    if (wasActive) await _disconnectAll(serverStopped: true);
   }
 
   /// Stops the relay and disconnects all clients.
@@ -224,7 +230,7 @@ class EmbeddedRelay {
     if (_starting != null) await _starting;
     await _mdns.stopAdvertising();
     await stopServerMode();
-    await _disconnectAll();
+    await _disconnectAll(serverStopped: true);
     final server = _server;
     final secureServer = _secureServer;
     _server = null;
@@ -236,12 +242,14 @@ class EmbeddedRelay {
   /// Crea una sesión para la propia app (dueña del relay) sin pasar por HTTP.
   String issueLocalToken() => _auth.createSession(_generateUuid());
 
-  Future<void> _disconnectAll() async {
+  Future<void> _disconnectAll({bool serverStopped = false}) async {
     final sockets = _clients.values.map((c) => c.ws).toList();
     _clients.clear();
     _transfers.clear();
     for (final ws in sockets) {
-      try { await ws.close(); } catch (_) {}
+      try {
+        await (serverStopped ? ws.close(serverStoppedCloseCode, 'Servidor detenido') : ws.close());
+      } catch (_) {}
     }
   }
 
